@@ -55,6 +55,10 @@ npm install
 npm run dev
 ```
 
+## Deploy (e.g. Railway)
+
+The repo root [`package.json`](package.json) defines **`npm start`** (`node server/index.js`) and **`postinstall`** so Railway (and similar) install **server** dependencies from the monorepo root. Set **`JWT_SECRET`**, **`ADMIN_EMAIL`**, **`ADMIN_PASSWORD`**, and optionally **`DATABASE_PATH`** on a persistent volume. **`PORT`** is provided by the platform. For the browser client, build [`client`](client) with **`VITE_SOCKET_URL`** pointing at your deployed API/WebSocket origin.
+
 ## Auth
 
 1. Open `http://localhost:5173`.
