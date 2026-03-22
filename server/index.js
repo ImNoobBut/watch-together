@@ -146,6 +146,13 @@ function leaveRoom(socket, notifyOthers = true) {
   }
 
   if (room.hostSocketId === socket.id) {
+    if (room.videoProvider === "screenshare") {
+      room.videoProvider = null;
+      room.videoSource = null;
+      room.currentTime = 0;
+      room.isPlaying = false;
+      io.to(roomId).emit("video_unloaded");
+    }
     const next = roomSockets.values().next().value;
     if (next) {
       room.hostSocketId = next;
@@ -155,6 +162,12 @@ function leaveRoom(socket, notifyOthers = true) {
   }
 
   broadcastPeers(roomId);
+}
+
+function socketsInSameRoom(roomId, a, b) {
+  const set = io.sockets.adapter.rooms.get(roomId);
+  if (!set) return false;
+  return set.has(a) && set.has(b);
 }
 
 io.on("connection", (socket) => {
@@ -307,6 +320,15 @@ io.on("connection", (socket) => {
       typeof data?.source === "string" ? data.source.trim() : "";
     if (!isValidProvider(provider) || !source) return;
 
+    if (provider === "screenshare" && !isHost(socket.id, room)) {
+      socket.emit("control_denied", { reason: "only_host" });
+      auditLog(socket.data.userSub, "playback_control_denied", {
+        roomId,
+        action: "load_video_screenshare",
+      });
+      return;
+    }
+
     room.videoProvider = provider;
     room.videoSource = source;
     room.currentTime = 0;
@@ -315,10 +337,55 @@ io.on("connection", (socket) => {
     io.to(roomId).emit("load_video", { provider, source });
   });
 
+  socket.on("unload_video", () => {
+    const roomId = socketRoom.get(socket.id);
+    const room = roomId ? rooms.get(roomId) : null;
+    if (!room) return;
+
+    if (!canControl(socket.id, room)) {
+      socket.emit("control_denied", { reason: "only_host" });
+      auditLog(socket.data.userSub, "playback_control_denied", {
+        roomId,
+        action: "unload_video",
+      });
+      return;
+    }
+
+    room.videoProvider = null;
+    room.videoSource = null;
+    room.currentTime = 0;
+    room.isPlaying = false;
+    io.to(roomId).emit("video_unloaded");
+  });
+
+  socket.on("rtc_signal", (data) => {
+    const roomId = socketRoom.get(socket.id);
+    const room = roomId ? rooms.get(roomId) : null;
+    if (!room || room.videoProvider !== "screenshare") return;
+
+    const targetSocketId =
+      typeof data?.targetSocketId === "string" ? data.targetSocketId : "";
+    const payload = data?.payload;
+    if (!targetSocketId || payload === null || typeof payload !== "object") {
+      return;
+    }
+
+    if (!socketsInSameRoom(roomId, socket.id, targetSocketId)) {
+      return;
+    }
+
+    io.to(targetSocketId).emit("rtc_signal", {
+      fromSocketId: socket.id,
+      payload,
+    });
+  });
+
   socket.on("play", (data) => {
     const roomId = socketRoom.get(socket.id);
     const room = roomId ? rooms.get(roomId) : null;
     if (!room) return;
+
+    if (room.videoProvider === "screenshare") return;
 
     if (!canControl(socket.id, room)) {
       socket.emit("control_denied", { reason: "only_host" });
@@ -342,6 +409,8 @@ io.on("connection", (socket) => {
     const room = roomId ? rooms.get(roomId) : null;
     if (!room) return;
 
+    if (room.videoProvider === "screenshare") return;
+
     if (!canControl(socket.id, room)) {
       socket.emit("control_denied", { reason: "only_host" });
       auditLog(socket.data.userSub, "playback_control_denied", {
@@ -363,6 +432,8 @@ io.on("connection", (socket) => {
     const roomId = socketRoom.get(socket.id);
     const room = roomId ? rooms.get(roomId) : null;
     if (!room) return;
+
+    if (room.videoProvider === "screenshare") return;
 
     if (!canControl(socket.id, room)) {
       socket.emit("control_denied", { reason: "only_host" });

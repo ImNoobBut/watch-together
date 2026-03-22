@@ -18,6 +18,10 @@ export function createVideoAdapter(
       return createHtml5Adapter(opts);
     case "iframe":
       return createIframeAdapter(opts);
+    case "screenshare":
+      return Promise.reject(
+        new Error("Screen share uses ScreenShareStage, not a video adapter."),
+      );
     default: {
       const _exhaustive: never = provider;
       return Promise.reject(new Error(`Unknown provider: ${_exhaustive}`));

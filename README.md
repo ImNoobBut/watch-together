@@ -1,6 +1,6 @@
 # Watch Together
 
-Watch YouTube, Vimeo, direct video files (e.g. `.mp4`), or generic embed URLs together in a room, with synced play/pause/seek (best effort for generic iframes) and chat. **No video is hosted**—each person plays media in their own browser.
+Watch YouTube, Vimeo, direct video files (e.g. `.mp4`), or generic embed URLs together in a room, with synced play/pause/seek (best effort for generic iframes) and chat. The **host** can also **share a screen or browser tab** to the room via WebRTC (mesh). **No video is hosted** on the server for URL-based playback—each person loads embeds or files in their own browser; screen share is peer‑to‑peer from the host.
 
 ## Requirements
 
@@ -16,7 +16,14 @@ Copy [`.env.example`](.env.example) and set at least:
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | If **no** admin exists in the database yet, the first server start creates that admin |
 | `DATABASE_PATH` | Optional — defaults to `server/data/app.db` (SQLite) |
 
-Client: `client/.env.development` can set `VITE_SOCKET_URL` (default `http://localhost:3001`).
+Client (`client/.env.development`):
+
+| Variable | Purpose |
+|----------|---------|
+| `VITE_SOCKET_URL` | Socket.IO server (default `http://localhost:3001`) |
+| `VITE_WEBRTC_ICE_SERVERS` | Optional JSON array of `RTCIceServer` objects for screen share (add **TURN** when P2P fails behind strict NAT). Example: `[{"urls":"stun:stun.l.google.com:19302"},{"urls":"turn:turn.example.com:3478","username":"u","credential":"p"}]` |
+
+If `VITE_WEBRTC_ICE_SERVERS` is unset, the client uses public **STUN** only (`stun:stun.l.google.com:19302`).
 
 ## Run locally
 
@@ -60,6 +67,9 @@ npm run dev
 - Default **max participants per room** is **10**; the **host** can change it (1–100) or set **Unlimited**.
 - The host can **kick** a participant (dropdown under “Room capacity”).
 - **Only host can control playback** toggle works as before.
+- **Share screen** (host only): mesh WebRTC — the host uploads once **per viewer**, so keep the group small (roughly **2–5 viewers**) for acceptable quality and bandwidth. For larger rooms, use a dedicated SFU service instead (not included here). **Audio** is requested when supported (e.g. Chrome: share a **tab** and enable **Share tab audio**); whole-screen capture may be video-only depending on the browser and OS.
+- **Screen share** requires a [**secure context**](https://developer.mozilla.org/en-US/docs/Web/Security/Secure_Contexts) in production (**HTTPS**); `http://localhost` is allowed for local development.
+- If the host leaves, screen share is **cleared** automatically for the room.
 
 ## Admin
 
@@ -77,6 +87,7 @@ npm run dev
 - **Vimeo** (`vimeo.com/123`)
 - **Direct file** (`.mp4`, `.webm`, `.ogg`)
 - **Other HTTPS URLs** — generic `<iframe>` (sync may be limited)
+- **Screen / tab capture** — host uses **Share screen** (not a URL); signaling goes through Socket.IO (`rtc_signal`, `video_unloaded`).
 
 ## Stack
 

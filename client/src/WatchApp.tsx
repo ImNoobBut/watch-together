@@ -4,6 +4,7 @@ import { io, type Socket } from "socket.io-client";
 import { socketUrl } from "./apiBase";
 import { Chat } from "./Chat";
 import { resolveVideoUrl } from "./resolveVideoUrl";
+import { ScreenShareStage } from "./ScreenShareStage";
 import { SyncedPlayer, type SyncedVideo } from "./SyncedPlayer";
 import "./index.css";
 
@@ -86,6 +87,10 @@ export function WatchApp({ token, onLogout, isAdmin }: Props) {
     };
   }, [socket, onLogout]);
 
+  const reportMediaError = useCallback((message: string) => {
+    setBanner(message);
+  }, []);
+
   const applyRoomPayload = useCallback((p: RoomPayload) => {
     setRoomId(p.roomId);
     setHostSocketId(p.hostSocketId);
@@ -154,9 +159,14 @@ export function WatchApp({ token, onLogout, isAdmin }: Props) {
       setPeers([]);
       setBanner("You were removed from the room by the host.");
     };
+    const onVideoUnloaded = () => {
+      setVideo(null);
+      setPlayback({ time: 0, isPlaying: false });
+    };
 
     socket.on("room_joined", onJoined);
     socket.on("load_video", onLoad);
+    socket.on("video_unloaded", onVideoUnloaded);
     socket.on("play", onPlay);
     socket.on("pause", onPause);
     socket.on("seek", onSeek);
@@ -180,6 +190,7 @@ export function WatchApp({ token, onLogout, isAdmin }: Props) {
       socket.off("room_peers", onPeers);
       socket.off("room_settings_changed", onSettings);
       socket.off("you_were_kicked", onKicked);
+      socket.off("video_unloaded", onVideoUnloaded);
     };
   }, [socket, applyRoomPayload]);
 
@@ -236,6 +247,12 @@ export function WatchApp({ token, onLogout, isAdmin }: Props) {
     setBanner(null);
     socket.emit("load_video", { provider: r.provider, source: r.source });
     setUrlInput("");
+  }
+
+  function startScreenShare() {
+    if (!socket || !isHost) return;
+    setBanner(null);
+    socket.emit("load_video", { provider: "screenshare", source: "stream" });
   }
 
   function applyMaxUsers() {
@@ -371,17 +388,34 @@ export function WatchApp({ token, onLogout, isAdmin }: Props) {
 
       {banner && <p className="banner">{banner}</p>}
 
-      <SyncedPlayer
-        socket={socket}
-        canControl={canControl}
-        video={video}
-        playback={playback}
-      />
+      {video?.provider === "screenshare" && myId && hostSocketId ? (
+        <ScreenShareStage
+          socket={socket}
+          mySocketId={myId}
+          hostSocketId={hostSocketId}
+          isHost={isHost}
+          peers={peers}
+          onError={reportMediaError}
+        />
+      ) : (
+        <SyncedPlayer
+          socket={socket}
+          canControl={canControl}
+          video={video}
+          playback={playback}
+        />
+      )}
 
       {video?.provider === "iframe" && (
         <p className="hint">
           Generic embed: playback may not stay in sync across everyone — use
           YouTube, Vimeo, or a direct file when possible.
+        </p>
+      )}
+      {video?.provider === "screenshare" && !isHost && (
+        <p className="hint">
+          Live screen share from the host. If video never appears, try a TURN
+          server (see README) or fewer participants.
         </p>
       )}
 
@@ -396,6 +430,14 @@ export function WatchApp({ token, onLogout, isAdmin }: Props) {
           />
           <button type="button" onClick={loadVideo} disabled={!canControl}>
             Load video
+          </button>
+          <button
+            type="button"
+            onClick={startScreenShare}
+            disabled={!isHost || video?.provider === "screenshare"}
+            title="Host only — mesh WebRTC to viewers in this room"
+          >
+            Share screen
           </button>
         </div>
         {hostToggle}

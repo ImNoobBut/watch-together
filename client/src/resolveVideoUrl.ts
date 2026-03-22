@@ -1,4 +1,9 @@
-export type VideoProvider = "youtube" | "vimeo" | "html5" | "iframe";
+export type VideoProvider =
+  | "youtube"
+  | "vimeo"
+  | "html5"
+  | "iframe"
+  | "screenshare";
 
 export type ResolveResult =
   | { ok: true; provider: VideoProvider; source: string }
@@ -46,6 +51,43 @@ function extractVimeoId(url: URL): string | null {
   return null;
 }
 
+/** Instagram reel/post/TV pages block raw iframes; /embed/ is the supported player URL. */
+function instagramEmbedSource(url: URL): string | null {
+  const host = url.hostname.replace(/^www\./, "").toLowerCase();
+  if (host !== "instagram.com" && host !== "instagr.am") return null;
+  const m = url.pathname.match(/^\/(p|reel|tv)\/([^/?#]+)\/?$/);
+  if (!m) return null;
+  const [, kind, code] = m;
+  if (!code) return null;
+  return `https://www.instagram.com/${kind}/${code}/embed/`;
+}
+
+/**
+ * Facebook video/reel/watch permalinks often work via the official Video Player plugin.
+ * Short links (fb.watch) and some pages still may not embed — use screen share instead.
+ */
+function facebookPluginEmbedSource(url: URL): string | null {
+  const host = url.hostname.replace(/^www\./, "").toLowerCase();
+  if (!host.endsWith("facebook.com")) return null;
+  if (url.pathname.startsWith("/plugins/video.php")) return null;
+
+  const path = url.pathname;
+  const looksLikeVideo =
+    /\/videos\/\d/.test(path) ||
+    /\/reel\//i.test(path) ||
+    path.toLowerCase().startsWith("/watch") ||
+    url.searchParams.has("v") ||
+    path.includes("/video.php");
+
+  if (!looksLikeVideo) return null;
+
+  const canonical = new URL(url.href);
+  canonical.protocol = "https:";
+  canonical.hostname = "www.facebook.com";
+  const href = encodeURIComponent(canonical.href);
+  return `https://www.facebook.com/plugins/video.php?href=${href}&show_text=false&width=560`;
+}
+
 const DIRECT_EXT = /\.(mp4|webm|ogg)(\?.*)?$/i;
 
 export function resolveVideoUrl(input: string): ResolveResult {
@@ -60,6 +102,12 @@ export function resolveVideoUrl(input: string): ResolveResult {
 
   const vm = extractVimeoId(url);
   if (vm) return { ok: true, provider: "vimeo", source: vm };
+
+  const ig = instagramEmbedSource(url);
+  if (ig) return { ok: true, provider: "iframe", source: ig };
+
+  const fb = facebookPluginEmbedSource(url);
+  if (fb) return { ok: true, provider: "iframe", source: fb };
 
   if (DIRECT_EXT.test(url.pathname) || DIRECT_EXT.test(url.href)) {
     return { ok: true, provider: "html5", source: url.href };
