@@ -244,17 +244,7 @@ export function ScreenShareStage({
 
   if (isHost) {
     return (
-      <div
-        className="synced-player-wrap"
-        style={{
-          width: "100%",
-          aspectRatio: "16 / 9",
-          background: "#111",
-          borderRadius: 8,
-          overflow: "hidden",
-          position: "relative",
-        }}
-      >
+      <div className="synced-player-wrap">
         {!localStream && (
           <div className="synced-player-placeholder">
             Starting screen capture…
@@ -297,17 +287,7 @@ export function ScreenShareStage({
   }
 
   return (
-    <div
-      className="synced-player-wrap"
-      style={{
-        width: "100%",
-        aspectRatio: "16 / 9",
-        background: "#111",
-        borderRadius: 8,
-        overflow: "hidden",
-        position: "relative",
-      }}
-    >
+    <div className="synced-player-wrap">
       {!remoteReady && (
         <div className="synced-player-placeholder">
           Waiting for host video…

@@ -4,6 +4,8 @@ import { io, type Socket } from "socket.io-client";
 import { socketUrl } from "./apiBase";
 import { APP_DISPLAY_NAME } from "./appName";
 import { Chat } from "./Chat";
+import { ActivityFeed } from "./components/watch/ActivityFeed";
+import { LobbyView } from "./components/watch/LobbyView";
 import {
   exitFullscreen,
   getFullscreenElement,
@@ -13,7 +15,11 @@ import {
 import { resolveVideoUrl } from "./resolveVideoUrl";
 import { ScreenShareStage } from "./ScreenShareStage";
 import { SiteFooter } from "./SiteFooter";
-import { SyncedPlayer, type SyncedVideo } from "./SyncedPlayer";
+import {
+  SyncedPlayer,
+  type PlayerLoadState,
+  type SyncedVideo,
+} from "./SyncedPlayer";
 import "./index.css";
 
 export type Peer = {
@@ -34,6 +40,8 @@ type RoomPayload = {
   maxUsers?: number | null;
   peers?: Peer[];
 };
+
+type ActivityLine = { id: number; text: string };
 
 type Props = {
   token: string;
@@ -60,12 +68,33 @@ export function WatchApp({ token, onLogout, isAdmin }: Props) {
   const [maxInput, setMaxInput] = useState("10");
   const [maxUnlimited, setMaxUnlimited] = useState(false);
   const [playerFullscreen, setPlayerFullscreen] = useState(false);
+  const [lobbyBusy, setLobbyBusy] = useState(false);
+  const [lobbyAction, setLobbyAction] = useState<null | "create" | "join">(
+    null,
+  );
+  const [activityLines, setActivityLines] = useState<ActivityLine[]>([]);
+
+  const phaseRef = useRef(phase);
+  const roomIdRef = useRef(roomId);
+  const peersRef = useRef(peers);
+  const pendingRejoinRoomIdRef = useRef<string | null>(null);
+  const activityIdRef = useRef(0);
+
+  phaseRef.current = phase;
+  roomIdRef.current = roomId;
+  peersRef.current = peers;
+
   const playerShellRef = useRef<HTMLDivElement>(null);
   const fullscreenModeRef = useRef<"none" | "dom" | "pseudo" | "ios-video">(
     "none",
   );
   const iosVideoRef = useRef<HTMLVideoElement | null>(null);
   const iosVideoDetachRef = useRef<(() => void) | null>(null);
+
+  const pushActivity = useCallback((text: string) => {
+    const id = ++activityIdRef.current;
+    setActivityLines((prev) => [...prev.slice(-14), { id, text }]);
+  }, []);
 
   const teardownPlayerFullscreen = useCallback(() => {
     const detach = iosVideoDetachRef.current;
@@ -215,35 +244,13 @@ export function WatchApp({ token, onLogout, isAdmin }: Props) {
     };
   }, [token]);
 
-  useEffect(() => {
-    if (!socket) return;
-    const onConnect = () => setMyId(socket.id ?? null);
-    const onDisconnect = () => setMyId(socket.id ?? null);
-    const onConnectError = (err: Error) => {
-      const m = err?.message || "";
-      if (
-        m.includes("INVALID_TOKEN") ||
-        m.includes("UNAUTHORIZED") ||
-        m.includes("BANNED")
-      ) {
-        onLogout();
-        return;
-      }
-      setBanner("Could not reach the server. Is it running?");
-    };
-    socket.on("connect", onConnect);
-    socket.on("disconnect", onDisconnect);
-    socket.on("connect_error", onConnectError);
-    if (socket.connected) onConnect();
-    return () => {
-      socket.off("connect", onConnect);
-      socket.off("disconnect", onDisconnect);
-      socket.off("connect_error", onConnectError);
-    };
-  }, [socket, onLogout]);
-
-  const reportMediaError = useCallback((message: string) => {
-    setBanner(message);
+  const resetRoomStateToLobby = useCallback(() => {
+    setRoomId(null);
+    setHostSocketId(null);
+    setVideo(null);
+    setPlayback({ time: 0, isPlaying: false });
+    setPeers([]);
+    setActivityLines([]);
   }, []);
 
   const applyRoomPayload = useCallback((p: RoomPayload) => {
@@ -270,10 +277,95 @@ export function WatchApp({ token, onLogout, isAdmin }: Props) {
 
   useEffect(() => {
     if (!socket) return;
+
+    const onConnect = () => {
+      setMyId(socket.id ?? null);
+      const rid = pendingRejoinRoomIdRef.current;
+      if (rid) {
+        setLobbyBusy(true);
+        setLobbyAction("join");
+        setBanner("Reconnecting to room…");
+        socket.emit("join_room", { roomId: rid });
+      }
+    };
+
+    const onDisconnect = (reason: string) => {
+      setMyId(socket.id ?? null);
+      const wasRoom = phaseRef.current === "room";
+      const rid = roomIdRef.current;
+      if (wasRoom && rid) {
+        pendingRejoinRoomIdRef.current = rid;
+        teardownPlayerFullscreen();
+        setPhase("lobby");
+        resetRoomStateToLobby();
+        setJoinInput(rid);
+        setLobbyBusy(false);
+        setLobbyAction(null);
+        const extra =
+          reason === "io client disconnect"
+            ? ""
+            : " You may rejoin from the lobby if this persists.";
+        setBanner(`Connection lost.${extra} Reconnecting…`);
+      } else {
+        setLobbyBusy(false);
+        setLobbyAction(null);
+      }
+    };
+
+    const onReconnectAttempt = () => {
+      if (pendingRejoinRoomIdRef.current) {
+        setBanner("Reconnecting to server…");
+      }
+    };
+
+    const onConnectError = (err: Error) => {
+      const m = err?.message || "";
+      if (
+        m.includes("INVALID_TOKEN") ||
+        m.includes("UNAUTHORIZED") ||
+        m.includes("BANNED")
+      ) {
+        onLogout();
+        return;
+      }
+      setBanner("Could not reach the server. Is it running?");
+    };
+
+    socket.on("connect", onConnect);
+    socket.on("disconnect", onDisconnect);
+    socket.on("reconnect_attempt", onReconnectAttempt);
+    socket.on("connect_error", onConnectError);
+    if (socket.connected) onConnect();
+    return () => {
+      socket.off("connect", onConnect);
+      socket.off("disconnect", onDisconnect);
+      socket.off("reconnect_attempt", onReconnectAttempt);
+      socket.off("connect_error", onConnectError);
+    };
+  }, [socket, onLogout, resetRoomStateToLobby, teardownPlayerFullscreen]);
+
+  const reportMediaError = useCallback((message: string) => {
+    setBanner(message);
+  }, []);
+
+  const onPlayerLoadStateChange = useCallback(
+    (state: PlayerLoadState, message?: string) => {
+      if (state === "error" && message) setBanner(message);
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (!socket) return;
     const onJoined = (p: RoomPayload) => {
+      pendingRejoinRoomIdRef.current = null;
+      setLobbyBusy(false);
+      setLobbyAction(null);
       applyRoomPayload(p);
       setPhase("room");
       setBanner(null);
+      const id = ++activityIdRef.current;
+      setActivityLines([{ id, text: "You joined the room." }]);
     };
     const onLoad = (d: { provider: string; source: string }) => {
       setVideo({
@@ -281,6 +373,7 @@ export function WatchApp({ token, onLogout, isAdmin }: Props) {
         source: d.source,
       });
       setPlayback({ time: 0, isPlaying: false });
+      pushActivity("New video loaded.");
     };
     const onPlay = ({ time }: { time: number }) =>
       setPlayback({ time, isPlaying: true });
@@ -294,10 +387,13 @@ export function WatchApp({ token, onLogout, isAdmin }: Props) {
       setHostSocketId(id);
     const onDenied = () => setBanner("That action is not allowed (host only).");
     const onJoinErr = (e: { error?: string }) => {
+      pendingRejoinRoomIdRef.current = null;
+      setLobbyBusy(false);
+      setLobbyAction(null);
       if (e?.error === "room_full") {
         setBanner("This room is full. Ask the host to raise the limit.");
       } else {
-        setBanner("Room not found.");
+        setBanner("Room not found or you can no longer join.");
       }
     };
     const onPeers = ({ peers: list }: { peers: Peer[] }) => setPeers(list);
@@ -307,17 +403,30 @@ export function WatchApp({ token, onLogout, isAdmin }: Props) {
       setMaxInput(m == null ? "" : String(m));
     };
     const onKicked = () => {
+      pendingRejoinRoomIdRef.current = null;
       teardownPlayerFullscreen();
       setPhase("lobby");
-      setRoomId(null);
-      setHostSocketId(null);
-      setVideo(null);
-      setPeers([]);
+      resetRoomStateToLobby();
+      setLobbyBusy(false);
+      setLobbyAction(null);
       setBanner("You were removed from the room by the host.");
     };
     const onVideoUnloaded = () => {
       setVideo(null);
       setPlayback({ time: 0, isPlaying: false });
+      pushActivity("Video cleared.");
+    };
+    const onUserJoined = ({
+      username: joinedName,
+    }: {
+      username: string;
+    }) => {
+      pushActivity(`${joinedName} joined.`);
+    };
+    const onUserLeft = ({ socketId }: { socketId: string }) => {
+      const left = peersRef.current.find((p) => p.socketId === socketId);
+      const label = left?.displayName ?? "Someone";
+      pushActivity(`${label} left.`);
     };
 
     socket.on("room_joined", onJoined);
@@ -333,6 +442,8 @@ export function WatchApp({ token, onLogout, isAdmin }: Props) {
     socket.on("room_peers", onPeers);
     socket.on("room_settings_changed", onSettings);
     socket.on("you_were_kicked", onKicked);
+    socket.on("user_joined", onUserJoined);
+    socket.on("user_left", onUserLeft);
     return () => {
       socket.off("room_joined", onJoined);
       socket.off("load_video", onLoad);
@@ -347,8 +458,16 @@ export function WatchApp({ token, onLogout, isAdmin }: Props) {
       socket.off("room_settings_changed", onSettings);
       socket.off("you_were_kicked", onKicked);
       socket.off("video_unloaded", onVideoUnloaded);
+      socket.off("user_joined", onUserJoined);
+      socket.off("user_left", onUserLeft);
     };
-  }, [socket, applyRoomPayload, teardownPlayerFullscreen]);
+  }, [
+    socket,
+    applyRoomPayload,
+    teardownPlayerFullscreen,
+    resetRoomStateToLobby,
+    pushActivity,
+  ]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -363,35 +482,53 @@ export function WatchApp({ token, onLogout, isAdmin }: Props) {
     if (!roomId) return;
     const u = new URL(window.location.href);
     u.searchParams.set("room", roomId);
-    void navigator.clipboard.writeText(u.toString());
-    setBanner("Room link copied.");
-    setTimeout(() => setBanner(null), 2000);
+    void navigator.clipboard.writeText(u.toString()).then(
+      () => {
+        setBanner("Room link copied.");
+        setTimeout(() => setBanner(null), 2000);
+      },
+      () => setBanner("Could not copy — select the room ID and copy manually."),
+    );
+  }, [roomId]);
+
+  const copyRoomId = useCallback(() => {
+    if (!roomId) return;
+    void navigator.clipboard.writeText(roomId).then(
+      () => {
+        setBanner("Room ID copied.");
+        setTimeout(() => setBanner(null), 2000);
+      },
+      () => setBanner("Could not copy — select the room ID and copy manually."),
+    );
   }, [roomId]);
 
   function createRoom() {
-    if (!socket) return;
+    if (!socket || lobbyBusy) return;
     setBanner(null);
+    setLobbyBusy(true);
+    setLobbyAction("create");
     socket.emit("create_room");
   }
 
   function joinRoom() {
-    if (!socket) return;
+    if (!socket || lobbyBusy) return;
     const id = joinInput.trim().toUpperCase();
     if (!id) return;
     setBanner(null);
+    setLobbyBusy(true);
+    setLobbyAction("join");
     socket.emit("join_room", { roomId: id });
   }
 
   function leaveRoom() {
     if (!socket) return;
+    pendingRejoinRoomIdRef.current = null;
     teardownPlayerFullscreen();
     socket.emit("leave_room");
     setPhase("lobby");
-    setRoomId(null);
-    setHostSocketId(null);
-    setVideo(null);
-    setPlayback({ time: 0, isPlaying: false });
-    setPeers([]);
+    resetRoomStateToLobby();
+    setLobbyBusy(false);
+    setLobbyAction(null);
   }
 
   function loadVideo() {
@@ -449,7 +586,7 @@ export function WatchApp({ token, onLogout, isAdmin }: Props) {
         Only host can control playback
       </label>
     ),
-    [isHost, onlyHostControls, socket]
+    [isHost, onlyHostControls, socket],
   );
 
   if (!socket || !socket.connected) {
@@ -470,62 +607,42 @@ export function WatchApp({ token, onLogout, isAdmin }: Props) {
 
   if (phase === "lobby") {
     return (
-      <div className="app lobby">
-        <header className="lobby-top">
-          <div className="lobby-nav">
-            {isAdmin && (
-              <Link to="/admin" className="nav-link">
-                Admin
-              </Link>
-            )}
-            <button type="button" className="linkish" onClick={onLogout}>
-              Sign out
-            </button>
-          </div>
-        </header>
-        <h1>{APP_DISPLAY_NAME}</h1>
-        <p className="muted">
-          YouTube, Vimeo, direct video files, or generic embed URLs.
-        </p>
-        {banner && <p className="banner">{banner}</p>}
-        <div className="lobby-actions">
-          <button type="button" onClick={createRoom}>
-            Create room
-          </button>
-          <div className="join-row">
-            <input
-              value={joinInput}
-              onChange={(e) => setJoinInput(e.target.value.toUpperCase())}
-              placeholder="ROOM ID"
-              maxLength={12}
-            />
-            <button type="button" onClick={joinRoom}>
-              Join
-            </button>
-          </div>
-        </div>
-        <SiteFooter />
-      </div>
+      <LobbyView
+        isAdmin={isAdmin}
+        onLogout={onLogout}
+        banner={banner}
+        joinInput={joinInput}
+        onJoinInputChange={setJoinInput}
+        onCreateRoom={createRoom}
+        onJoinRoom={joinRoom}
+        lobbyBusy={lobbyBusy}
+        lobbyAction={lobbyAction}
+      />
     );
   }
 
   return (
-    <div className="app room">
+    <div className="app room room-layout">
       <header className="room-header">
-        <div>
+        <div className="room-header__main">
           <h1>{APP_DISPLAY_NAME}</h1>
-          <p className="muted">
-            Room <strong>{roomId}</strong>
-            {" · "}
+          <p className="muted room-header__meta">
             <span title="Members / max">{capLabel}</span>
             {username && (
               <>
-                {" "}
-                · You are <strong>{username}</strong>
+                {" · "}
+                You are <strong>{username}</strong>
                 {isHost && " (host)"}
               </>
             )}
           </p>
+          <div className="room-id-row">
+            <span className="room-id-label">Room</span>
+            <code className="room-id-chip mono">{roomId}</code>
+            <button type="button" className="btn-secondary" onClick={copyRoomId}>
+              Copy ID
+            </button>
+          </div>
         </div>
         <div className="header-actions">
           {isAdmin && (
@@ -533,150 +650,161 @@ export function WatchApp({ token, onLogout, isAdmin }: Props) {
               Admin
             </Link>
           )}
-          <button type="button" onClick={copyLink}>
+          <button type="button" className="btn-secondary" onClick={copyLink}>
             Copy room link
           </button>
           <button type="button" onClick={leaveRoom}>
             Leave
           </button>
-          <button type="button" onClick={onLogout}>
+          <button type="button" className="linkish" onClick={onLogout}>
             Sign out
           </button>
         </div>
       </header>
 
-      {banner && <p className="banner">{banner}</p>}
+      {banner && <p className="banner banner--room">{banner}</p>}
 
-      <div className="player-shell" ref={playerShellRef}>
-        <div className="player-shell__toolbar">
-          <button
-            type="button"
-            className="player-fullscreen-btn"
-            onClick={togglePlayerFullscreen}
-            aria-pressed={playerFullscreen}
-            title={
-              playerFullscreen
-                ? "Exit fullscreen (Esc)"
-                : "Fill the screen with the player"
-            }
-          >
-            {playerFullscreen ? "Exit fullscreen" : "Fullscreen"}
-          </button>
-        </div>
-        {video?.provider === "screenshare" && myId && hostSocketId ? (
-          <ScreenShareStage
-            socket={socket}
-            mySocketId={myId}
-            hostSocketId={hostSocketId}
-            isHost={isHost}
-            peers={peers}
-            onError={reportMediaError}
-          />
-        ) : (
-          <SyncedPlayer
-            socket={socket}
-            canControl={canControl}
-            video={video}
-            playback={playback}
-          />
-        )}
-      </div>
-
-      {video?.provider === "iframe" && (
-        <p className="hint">
-          Generic embed: playback may not stay in sync across everyone — use
-          YouTube, Vimeo, or a direct file when possible.
-        </p>
-      )}
-      {video?.provider === "screenshare" && !isHost && (
-        <p className="hint">
-          Live screen share from the host. If video never appears, try a TURN
-          server (see README) or fewer participants.
-        </p>
-      )}
-
-      <section className="controls">
-        <div className="load-row">
-          <input
-            className="url-input"
-            value={urlInput}
-            onChange={(e) => setUrlInput(e.target.value)}
-            placeholder="Paste video URL…"
-            disabled={!canControl}
-          />
-          <button type="button" onClick={loadVideo} disabled={!canControl}>
-            Load video
-          </button>
-          <button
-            type="button"
-            onClick={startScreenShare}
-            disabled={!isHost || video?.provider === "screenshare"}
-            title="Host only — mesh WebRTC to viewers in this room"
-          >
-            Share screen
-          </button>
-        </div>
-        {hostToggle}
-        {isHost && (
-          <div className="host-tools">
-            <p className="muted small" style={{ margin: "0.25rem 0" }}>
-              Room capacity (host)
-            </p>
-            <div className="load-row">
-              <label className="host-toggle">
-                <input
-                  type="checkbox"
-                  checked={maxUnlimited}
-                  onChange={(e) => setMaxUnlimited(e.target.checked)}
-                />
-                Unlimited
-              </label>
-              <input
-                type="number"
-                min={1}
-                max={100}
-                disabled={maxUnlimited}
-                value={maxInput}
-                onChange={(e) => setMaxInput(e.target.value)}
-                style={{ width: 80 }}
-              />
-              <button type="button" onClick={applyMaxUsers}>
-                Apply limit
-              </button>
-            </div>
-            <div className="load-row">
-              <select
-                value={kickTarget}
-                onChange={(e) => setKickTarget(e.target.value)}
-                className="kick-select"
-              >
-                <option value="">Kick participant…</option>
-                {peers
-                  .filter((p) => p.socketId !== myId)
-                  .map((p) => (
-                    <option key={p.socketId} value={p.socketId}>
-                      {p.displayName} ({p.socketId.slice(0, 6)}…)
-                    </option>
-                  ))}
-              </select>
+      <div className="room-main">
+        <div className="room-main__primary">
+          <div className="player-shell" ref={playerShellRef}>
+            <div className="player-shell__toolbar">
               <button
                 type="button"
-                onClick={kickSelected}
-                disabled={!kickTarget}
+                className="player-fullscreen-btn"
+                onClick={togglePlayerFullscreen}
+                aria-pressed={playerFullscreen}
+                title={
+                  playerFullscreen
+                    ? "Exit fullscreen (Esc)"
+                    : "Fill the screen with the player"
+                }
               >
-                Kick
+                {playerFullscreen ? "Exit fullscreen" : "Fullscreen"}
               </button>
             </div>
+            {video?.provider === "screenshare" && myId && hostSocketId ? (
+              <ScreenShareStage
+                socket={socket}
+                mySocketId={myId}
+                hostSocketId={hostSocketId}
+                isHost={isHost}
+                peers={peers}
+                onError={reportMediaError}
+              />
+            ) : (
+              <SyncedPlayer
+                socket={socket}
+                canControl={canControl}
+                video={video}
+                playback={playback}
+                onLoadStateChange={onPlayerLoadStateChange}
+              />
+            )}
           </div>
-        )}
-        {!canControl && (
-          <p className="muted small">
-            Only the host can control playback right now.
-          </p>
-        )}
-      </section>
 
-      <Chat socket={socket} disabled={false} />
+          {video?.provider === "iframe" && (
+            <p className="hint">
+              Generic embed: playback may not stay in sync across everyone — use
+              YouTube, Vimeo, or a direct file when possible.
+            </p>
+          )}
+          {video?.provider === "screenshare" && !isHost && (
+            <p className="hint">
+              Live screen share from the host. If video never appears, try a TURN
+              server (see README) or fewer participants.
+            </p>
+          )}
+
+          <section className="controls">
+            <div className="load-row">
+              <input
+                className="url-input"
+                value={urlInput}
+                onChange={(e) => setUrlInput(e.target.value)}
+                placeholder="Paste video URL…"
+                disabled={!canControl}
+              />
+              <button type="button" onClick={loadVideo} disabled={!canControl}>
+                Load video
+              </button>
+              <button
+                type="button"
+                onClick={startScreenShare}
+                disabled={!isHost || video?.provider === "screenshare"}
+                title="Host only — mesh WebRTC to viewers in this room"
+              >
+                Share screen
+              </button>
+            </div>
+            {hostToggle}
+            {isHost && (
+              <div className="host-tools">
+                <p className="muted small host-tools__label">
+                  Room capacity (host)
+                </p>
+                <div className="load-row">
+                  <label className="host-toggle">
+                    <input
+                      type="checkbox"
+                      checked={maxUnlimited}
+                      onChange={(e) => setMaxUnlimited(e.target.checked)}
+                    />
+                    Unlimited
+                  </label>
+                  <input
+                    type="number"
+                    className="input-narrow"
+                    min={1}
+                    max={100}
+                    disabled={maxUnlimited}
+                    value={maxInput}
+                    onChange={(e) => setMaxInput(e.target.value)}
+                  />
+                  <button type="button" onClick={applyMaxUsers}>
+                    Apply limit
+                  </button>
+                </div>
+                <div className="load-row">
+                  <select
+                    value={kickTarget}
+                    onChange={(e) => setKickTarget(e.target.value)}
+                    className="kick-select"
+                  >
+                    <option value="">Kick participant…</option>
+                    {peers
+                      .filter((p) => p.socketId !== myId)
+                      .map((p) => (
+                        <option key={p.socketId} value={p.socketId}>
+                          {p.displayName} ({p.socketId.slice(0, 6)}…)
+                        </option>
+                      ))}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={kickSelected}
+                    disabled={!kickTarget}
+                  >
+                    Kick
+                  </button>
+                </div>
+              </div>
+            )}
+            {!canControl && (
+              <p className="muted small">
+                Only the host can control playback right now.
+              </p>
+            )}
+          </section>
+        </div>
+
+        <aside className="room-sidebar">
+          <ActivityFeed lines={activityLines} />
+          <div className="chat-card">
+            <Chat key={roomId ?? ""} socket={socket} disabled={false} />
+          </div>
+        </aside>
+      </div>
+
       <SiteFooter />
     </div>
   );

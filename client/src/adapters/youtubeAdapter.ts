@@ -1,3 +1,4 @@
+import { createEmitCooldown } from "./emitCooldown";
 import type { CreateAdapterOptions, VideoAdapter } from "./types";
 
 let apiPromise: Promise<void> | null = null;
@@ -29,6 +30,7 @@ export async function createYoutubeAdapter(
   if (!window.YT?.Player) throw new Error("YouTube API unavailable");
 
   let suppress = false;
+  const emitCooldown = createEmitCooldown(350);
   /** Real API object — only valid after `onReady` (`seekTo` etc. are missing before then). */
   let player: YT.Player | null = null;
   /** Constructor return — use for `destroy()` even if `onReady` never ran. */
@@ -52,7 +54,7 @@ export async function createYoutubeAdapter(
   const startPoll = () => {
     clearPoll();
     pollId = setInterval(() => {
-      if (suppress || !player || destroyed) return;
+      if (suppress || emitCooldown.isActive() || !player || destroyed) return;
       try {
         const t = player.getCurrentTime();
         const st = player.getPlayerState();
@@ -103,7 +105,7 @@ export async function createYoutubeAdapter(
             resolveReady();
           },
           onStateChange: (e) => {
-            if (suppress || !player || destroyed) return;
+            if (suppress || emitCooldown.isActive() || !player || destroyed) return;
             try {
               const t = player.getCurrentTime();
               if (e.data === YT.PlayerState.PLAYING) {
@@ -140,6 +142,7 @@ export async function createYoutubeAdapter(
       if (!p || typeof p.seekTo !== "function") return;
       p.seekTo(time, true);
       lastKnownTime = time;
+      emitCooldown.bump();
     },
 
     async applyPlay(time: number) {
@@ -148,6 +151,7 @@ export async function createYoutubeAdapter(
       p.seekTo(time, true);
       p.playVideo();
       lastKnownTime = time;
+      emitCooldown.bump();
     },
 
     async applyPause(time: number) {
@@ -156,6 +160,7 @@ export async function createYoutubeAdapter(
       p.seekTo(time, true);
       p.pauseVideo();
       lastKnownTime = time;
+      emitCooldown.bump();
     },
   };
 }

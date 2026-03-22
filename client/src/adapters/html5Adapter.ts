@@ -1,9 +1,11 @@
+import { createEmitCooldown } from "./emitCooldown";
 import type { CreateAdapterOptions, VideoAdapter } from "./types";
 
 export async function createHtml5Adapter(
   opts: CreateAdapterOptions
 ): Promise<VideoAdapter> {
   let suppress = false;
+  const emitCooldown = createEmitCooldown(350);
   let video: HTMLVideoElement | null = null;
 
   return {
@@ -24,15 +26,15 @@ export async function createHtml5Adapter(
       el.crossOrigin = "anonymous";
 
       const onPlay = () => {
-        if (suppress || !video) return;
+        if (suppress || emitCooldown.isActive() || !video) return;
         opts.onUserEvent({ type: "play", time: video.currentTime });
       };
       const onPause = () => {
-        if (suppress || !video) return;
+        if (suppress || emitCooldown.isActive() || !video) return;
         opts.onUserEvent({ type: "pause", time: video.currentTime });
       };
       const onSeeked = () => {
-        if (suppress || !video) return;
+        if (suppress || emitCooldown.isActive() || !video) return;
         opts.onUserEvent({ type: "seek", time: video.currentTime });
       };
 
@@ -53,18 +55,21 @@ export async function createHtml5Adapter(
     async applySeek(time: number) {
       if (!video) return;
       video.currentTime = time;
+      emitCooldown.bump();
     },
 
     async applyPlay(time: number) {
       if (!video) return;
       video.currentTime = time;
       await video.play().catch(() => {});
+      emitCooldown.bump();
     },
 
     async applyPause(time: number) {
       if (!video) return;
       video.currentTime = time;
       video.pause();
+      emitCooldown.bump();
     },
   };
 }

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { Socket } from "socket.io-client";
 import { createVideoAdapter } from "./adapters";
 import type { VideoAdapter } from "./adapters/types";
@@ -8,14 +8,37 @@ export type SyncedVideo = { provider: VideoProvider; source: string };
 
 type Playback = { time: number; isPlaying: boolean };
 
+export type PlayerLoadState = "idle" | "loading" | "ready" | "error";
+
+const TIME_EPSILON = 0.35;
+const SEEK_DEBOUNCE_MS = 160;
+
 type Props = {
   socket: Socket;
   canControl: boolean;
   video: SyncedVideo | null;
   playback: Playback;
+  onLoadStateChange?: (state: PlayerLoadState, message?: string) => void;
 };
 
-export function SyncedPlayer({ socket, canControl, video, playback }: Props) {
+function playbackMatchesApplied(
+  pb: Playback,
+  applied: { time: number; isPlaying: boolean },
+) {
+  if (applied.time < 0) return false;
+  return (
+    pb.isPlaying === applied.isPlaying &&
+    Math.abs(pb.time - applied.time) < TIME_EPSILON
+  );
+}
+
+export function SyncedPlayer({
+  socket,
+  canControl,
+  video,
+  playback,
+  onLoadStateChange,
+}: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const adapterRef = useRef<VideoAdapter | null>(null);
   const canControlRef = useRef(canControl);
@@ -23,6 +46,32 @@ export function SyncedPlayer({ socket, canControl, video, playback }: Props) {
 
   const playbackRef = useRef(playback);
   playbackRef.current = playback;
+
+  const lastAppliedRef = useRef<{ time: number; isPlaying: boolean }>({
+    time: -1,
+    isPlaying: false,
+  });
+  const seekDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const [loadState, setLoadState] = useState<PlayerLoadState>("idle");
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  const reportLoad = useCallback(
+    (state: PlayerLoadState, message?: string) => {
+      setLoadState(state);
+      if (state === "error" && message) setLoadError(message);
+      else if (state !== "error") setLoadError(null);
+      onLoadStateChange?.(state, message);
+    },
+    [onLoadStateChange],
+  );
+
+  useEffect(() => {
+    if (!video) {
+      reportLoad("idle");
+      lastAppliedRef.current = { time: -1, isPlaying: false };
+    }
+  }, [video, reportLoad]);
 
   useEffect(() => {
     if (!video || !containerRef.current) {
@@ -34,6 +83,7 @@ export function SyncedPlayer({ socket, canControl, video, playback }: Props) {
 
     const el = containerRef.current;
     let cancelled = false;
+    reportLoad("loading");
 
     void (async () => {
       try {
@@ -59,13 +109,14 @@ export function SyncedPlayer({ socket, canControl, video, playback }: Props) {
         if (pb.isPlaying) await adapter.applyPlay(pb.time);
         else await adapter.applyPause(pb.time);
         adapter.setSuppressEmit(false);
+        lastAppliedRef.current = { time: pb.time, isPlaying: pb.isPlaying };
+        if (!cancelled) reportLoad("ready");
       } catch (err) {
         console.error(err);
         el.innerHTML = "";
-        const p = document.createElement("p");
-        p.textContent =
+        const msg =
           err instanceof Error ? err.message : "Could not load this video.";
-        el.appendChild(p);
+        if (!cancelled) reportLoad("error", msg);
       }
     })();
 
@@ -74,34 +125,73 @@ export function SyncedPlayer({ socket, canControl, video, playback }: Props) {
       adapterRef.current?.destroy();
       adapterRef.current = null;
     };
-  }, [socket, video]);
+  }, [socket, video, reportLoad]);
+
+  useEffect(() => {
+    return () => {
+      if (seekDebounceRef.current) {
+        clearTimeout(seekDebounceRef.current);
+        seekDebounceRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (seekDebounceRef.current) {
+      clearTimeout(seekDebounceRef.current);
+      seekDebounceRef.current = null;
+    }
+  }, [video]);
 
   useEffect(() => {
     const a = adapterRef.current;
     if (!a || !video) return;
-    void (async () => {
-      a.setSuppressEmit(true);
-      if (playback.isPlaying) await a.applyPlay(playback.time);
-      else await a.applyPause(playback.time);
-      a.setSuppressEmit(false);
-    })();
+
+    const applied = lastAppliedRef.current;
+    if (playbackMatchesApplied(playback, applied)) return;
+
+    const samePlayState = playback.isPlaying === applied.isPlaying;
+
+    const runApply = async (pb: Playback) => {
+      const ad = adapterRef.current;
+      if (!ad) return;
+      ad.setSuppressEmit(true);
+      if (pb.isPlaying) await ad.applyPlay(pb.time);
+      else await ad.applyPause(pb.time);
+      ad.setSuppressEmit(false);
+      lastAppliedRef.current = { time: pb.time, isPlaying: pb.isPlaying };
+    };
+
+    if (!samePlayState) {
+      void runApply(playback);
+      return;
+    }
+
+    seekDebounceRef.current = setTimeout(() => {
+      seekDebounceRef.current = null;
+      const pb = playbackRef.current;
+      void runApply(pb);
+    }, SEEK_DEBOUNCE_MS);
   }, [playback, video]);
 
+  const showLoadingOverlay = Boolean(video) && loadState === "loading";
+  const showErrorOverlay = Boolean(video) && loadState === "error";
+
   return (
-    <div
-      className="synced-player-wrap"
-      style={{
-        width: "100%",
-        aspectRatio: "16 / 9",
-        background: "#111",
-        borderRadius: 8,
-        overflow: "hidden",
-        position: "relative",
-      }}
-    >
+    <div className="synced-player-wrap">
       {!video && (
         <div className="synced-player-placeholder">
           No video loaded. Paste a URL and click Load video.
+        </div>
+      )}
+      {showLoadingOverlay && (
+        <div className="synced-player-overlay" aria-live="polite">
+          Loading video…
+        </div>
+      )}
+      {showErrorOverlay && loadError && (
+        <div className="synced-player-overlay synced-player-overlay--error" role="alert">
+          {loadError}
         </div>
       )}
       <div
