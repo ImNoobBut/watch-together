@@ -74,7 +74,7 @@ Use a **second** service in the same Railway project, pointed at the same repo:
 3. **Variables** (required at **build** time for Vite):
    - **`VITE_SOCKET_URL`** — public **`https://…`** origin of your Node service (no trailing slash). Example: `https://watch-together-api.up.railway.app`
    - Optional: **`VITE_WEBRTC_ICE_SERVERS`**, **`VITE_APP_COPYRIGHT_HOLDER`**, **`VITE_APP_BUILT_BY`** (same meaning as in [Configuration](#configuration)).
-4. Deploy. [`client/railway.json`](client/railway.json) sets **`npm ci && npm run build`** and starts **`serve`** on **`$PORT`** with SPA fallback (deep links like `/admin` work). If you change **`VITE_SOCKET_URL`**, trigger a new deploy so the bundle rebuilds.
+4. Deploy. [`client/railway.json`](client/railway.json) uses **`npm run build`** for the build phase and **`serve`** on **`$PORT`** with SPA fallback (e.g. `/admin`). Railpack already runs **`npm ci`** during install, so the build command must not run **`npm ci`** again (that can **`EBUSY`** on `node_modules/.vite`). Redeploy after changing **`VITE_SOCKET_URL`**.
 5. **Generate Domain** (or custom domain) on the **client** service for the public site URL.
 
 Local production check after `npm run build` in `client`: **`npm start`** serves `dist` on port **3000** (see [`client/package.json`](client/package.json)). Template: [`client/.env.production.example`](client/.env.production.example).
