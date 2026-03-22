@@ -208,13 +208,38 @@ button:disabled {
   padding: var(--space-md);
 }
 
+.activity-feed__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-sm);
+}
+
 .activity-feed__title {
-  margin: 0 0 var(--space-sm);
+  margin: 0;
   font-size: 0.75rem;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--color-muted);
+}
+
+.activity-feed__more-btn {
+  padding: 0;
+  min-height: unset;
+  border: none;
+  background: transparent;
+  color: var(--color-accent);
+  font-size: 0.8125rem;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.activity-feed__more-btn:hover {
+  color: #a8c4ff;
 }
 
 .activity-feed__list {
@@ -229,6 +254,83 @@ button:disabled {
 }
 
 .activity-feed__item:last-child {
+  margin-bottom: 0;
+}
+
+.activity-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483647;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-lg);
+  background: rgba(0, 0, 0, 0.65);
+}
+
+.activity-modal {
+  width: 100%;
+  max-width: 420px;
+  max-height: min(70vh, 520px);
+  display: flex;
+  flex-direction: column;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.45);
+}
+
+.activity-modal__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  padding: var(--space-md) var(--space-lg);
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+
+.activity-modal__title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.activity-modal__close {
+  flex-shrink: 0;
+  min-height: 2.25rem;
+  min-width: 2.25rem;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-muted);
+  font-size: 1.5rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.activity-modal__close:hover {
+  color: var(--color-text);
+  background: var(--color-surface-raised);
+}
+
+.activity-modal__list {
+  margin: 0;
+  padding: var(--space-md) var(--space-lg) var(--space-lg);
+  overflow-y: auto;
+  list-style: disc;
+  padding-left: 1.75rem;
+  font-size: 0.875rem;
+  color: #b8b8c8;
+}
+
+.activity-modal__item {
+  margin-bottom: 0.35rem;
+}
+
+.activity-modal__item:last-child {
   margin-bottom: 0;
 }
 

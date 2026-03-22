@@ -4,7 +4,10 @@ import { io, type Socket } from "socket.io-client";
 import { socketUrl } from "./apiBase";
 import { APP_DISPLAY_NAME } from "./appName";
 import { Chat } from "./Chat";
-import { ActivityFeed } from "./components/watch/ActivityFeed";
+import {
+  ActivityFeed,
+  type ActivityLine,
+} from "./components/watch/ActivityFeed";
 import { LobbyView } from "./components/watch/LobbyView";
 import {
   exitFullscreen,
@@ -40,8 +43,6 @@ type RoomPayload = {
   maxUsers?: number | null;
   peers?: Peer[];
 };
-
-type ActivityLine = { id: number; text: string };
 
 type Props = {
   token: string;
@@ -93,7 +94,7 @@ export function WatchApp({ token, onLogout, isAdmin }: Props) {
 
   const pushActivity = useCallback((text: string) => {
     const id = ++activityIdRef.current;
-    setActivityLines((prev) => [...prev.slice(-14), { id, text }]);
+    setActivityLines((prev) => [...prev.slice(-199), { id, text }]);
   }, []);
 
   const teardownPlayerFullscreen = useCallback(() => {
