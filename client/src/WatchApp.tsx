@@ -5,9 +5,10 @@ import { socketUrl } from "./apiBase";
 import { APP_DISPLAY_NAME } from "./appName";
 import { Chat } from "./Chat";
 import {
-  enterFullscreen,
   exitFullscreen,
   getFullscreenElement,
+  tryEnterDomFullscreen,
+  tryEnterIosNativeVideoFullscreen,
 } from "./fullscreenDom";
 import { resolveVideoUrl } from "./resolveVideoUrl";
 import { ScreenShareStage } from "./ScreenShareStage";
@@ -60,10 +61,47 @@ export function WatchApp({ token, onLogout, isAdmin }: Props) {
   const [maxUnlimited, setMaxUnlimited] = useState(false);
   const [playerFullscreen, setPlayerFullscreen] = useState(false);
   const playerShellRef = useRef<HTMLDivElement>(null);
+  const fullscreenModeRef = useRef<"none" | "dom" | "pseudo" | "ios-video">(
+    "none",
+  );
+  const iosVideoRef = useRef<HTMLVideoElement | null>(null);
+  const iosVideoDetachRef = useRef<(() => void) | null>(null);
+
+  const teardownPlayerFullscreen = useCallback(() => {
+    const detach = iosVideoDetachRef.current;
+    const v = iosVideoRef.current as
+      | (HTMLVideoElement & { webkitExitFullscreen?: () => void })
+      | null;
+    v?.webkitExitFullscreen?.();
+    detach?.();
+
+    iosVideoDetachRef.current = null;
+    iosVideoRef.current = null;
+
+    const shell = playerShellRef.current;
+    if (shell?.classList.contains("player-shell--pseudo-fullscreen")) {
+      shell.classList.remove("player-shell--pseudo-fullscreen");
+      document.body.style.overflow = "";
+    }
+    if (shell && getFullscreenElement() === shell) {
+      void exitFullscreen();
+    }
+    fullscreenModeRef.current = "none";
+    setPlayerFullscreen(false);
+  }, []);
 
   const syncPlayerFullscreen = useCallback(() => {
     const shell = playerShellRef.current;
-    setPlayerFullscreen(!!shell && getFullscreenElement() === shell);
+    const fs = getFullscreenElement();
+    if (fs === shell) {
+      fullscreenModeRef.current = "dom";
+      setPlayerFullscreen(true);
+      return;
+    }
+    if (fullscreenModeRef.current === "dom") {
+      fullscreenModeRef.current = "none";
+      setPlayerFullscreen(false);
+    }
   }, []);
 
   useEffect(() => {
@@ -78,15 +116,96 @@ export function WatchApp({ token, onLogout, isAdmin }: Props) {
     };
   }, [syncPlayerFullscreen]);
 
-  const togglePlayerFullscreen = useCallback(() => {
+  useEffect(() => {
+    if (!playerFullscreen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      const shell = playerShellRef.current;
+      if (!shell?.classList.contains("player-shell--pseudo-fullscreen")) return;
+      shell.classList.remove("player-shell--pseudo-fullscreen");
+      document.body.style.overflow = "";
+      fullscreenModeRef.current = "none";
+      setPlayerFullscreen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [playerFullscreen]);
+
+  useEffect(() => () => teardownPlayerFullscreen(), [teardownPlayerFullscreen]);
+
+  const togglePlayerFullscreen = useCallback(async () => {
     const el = playerShellRef.current;
     if (!el) return;
-    if (getFullscreenElement() === el) {
-      void exitFullscreen();
-    } else {
-      void enterFullscreen(el);
+
+    if (playerFullscreen) {
+      if (fullscreenModeRef.current === "pseudo") {
+        el.classList.remove("player-shell--pseudo-fullscreen");
+        document.body.style.overflow = "";
+        fullscreenModeRef.current = "none";
+        setPlayerFullscreen(false);
+        return;
+      }
+      if (fullscreenModeRef.current === "ios-video") {
+        const v = iosVideoRef.current as
+          | (HTMLVideoElement & { webkitExitFullscreen?: () => void })
+          | null;
+        v?.webkitExitFullscreen?.();
+        iosVideoDetachRef.current?.();
+        return;
+      }
+      if (getFullscreenElement() === el) {
+        void exitFullscreen();
+        return;
+      }
+      fullscreenModeRef.current = "none";
+      setPlayerFullscreen(false);
+      return;
     }
-  }, []);
+
+    if (await tryEnterDomFullscreen(el)) {
+      fullscreenModeRef.current = "dom";
+      setPlayerFullscreen(true);
+      return;
+    }
+
+    const videoEl = tryEnterIosNativeVideoFullscreen(el);
+    if (videoEl) {
+      fullscreenModeRef.current = "ios-video";
+      iosVideoRef.current = videoEl;
+
+      const detach = () => {
+        videoEl.removeEventListener("webkitendfullscreen", detach);
+        videoEl.removeEventListener(
+          "webkitpresentationmodechanged",
+          onPresentation,
+        );
+        if (iosVideoRef.current === videoEl) iosVideoRef.current = null;
+        if (iosVideoDetachRef.current === detach) iosVideoDetachRef.current = null;
+        if (fullscreenModeRef.current === "ios-video") {
+          fullscreenModeRef.current = "none";
+          setPlayerFullscreen(false);
+        }
+      };
+
+      function onPresentation() {
+        const mode = (
+          videoEl as HTMLVideoElement & { webkitPresentationMode?: string }
+        ).webkitPresentationMode;
+        if (mode !== "fullscreen") detach();
+      }
+
+      videoEl.addEventListener("webkitendfullscreen", detach);
+      videoEl.addEventListener("webkitpresentationmodechanged", onPresentation);
+      iosVideoDetachRef.current = detach;
+      setPlayerFullscreen(true);
+      return;
+    }
+
+    el.classList.add("player-shell--pseudo-fullscreen");
+    document.body.style.overflow = "hidden";
+    fullscreenModeRef.current = "pseudo";
+    setPlayerFullscreen(true);
+  }, [playerFullscreen]);
 
   useEffect(() => {
     const s = io(socketUrl(), { auth: { token } });
@@ -188,6 +307,7 @@ export function WatchApp({ token, onLogout, isAdmin }: Props) {
       setMaxInput(m == null ? "" : String(m));
     };
     const onKicked = () => {
+      teardownPlayerFullscreen();
       setPhase("lobby");
       setRoomId(null);
       setHostSocketId(null);
@@ -228,7 +348,7 @@ export function WatchApp({ token, onLogout, isAdmin }: Props) {
       socket.off("you_were_kicked", onKicked);
       socket.off("video_unloaded", onVideoUnloaded);
     };
-  }, [socket, applyRoomPayload]);
+  }, [socket, applyRoomPayload, teardownPlayerFullscreen]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -264,6 +384,7 @@ export function WatchApp({ token, onLogout, isAdmin }: Props) {
 
   function leaveRoom() {
     if (!socket) return;
+    teardownPlayerFullscreen();
     socket.emit("leave_room");
     setPhase("lobby");
     setRoomId(null);

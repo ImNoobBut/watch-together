@@ -364,3 +364,37 @@ button.linkish {
   aspect-ratio: unset;
   max-height: none;
 }
+
+/* Phones / iOS: when the Fullscreen API cannot target this div (e.g. YouTube
+   iframe), expand the player over the viewport instead. */
+.player-shell.player-shell--pseudo-fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483646;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 100vh;
+  min-height: 100dvh;
+  max-height: 100dvh;
+  padding: max(0.5rem, env(safe-area-inset-top))
+    max(0.5rem, env(safe-area-inset-right))
+    max(0.5rem, env(safe-area-inset-bottom))
+    max(0.5rem, env(safe-area-inset-left));
+  background: #0a0a0c;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.player-shell.player-shell--pseudo-fullscreen .player-shell__toolbar {
+  flex-shrink: 0;
+}
+
+.player-shell.player-shell--pseudo-fullscreen .synced-player-wrap {
+  flex: 1;
+  min-height: 0;
+  aspect-ratio: unset;
+  max-height: none;
+}
