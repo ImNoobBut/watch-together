@@ -15,6 +15,7 @@ Copy [`.env.example`](.env.example) and set at least:
 | `JWT_SECRET` | Required in production — signing key for auth tokens |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | If **no** admin exists in the database yet, the first server start creates that admin |
 | `DATABASE_PATH` | Optional — defaults to `server/data/app.db` (SQLite) |
+| `CORS_ORIGIN` | Optional — comma-separated **exact** browser origins allowed to call the API (e.g. `https://your-client.up.railway.app`). Use when the static client and API are on **different** hosts. If unset, the server **reflects** the request `Origin` (usual default). |
 
 Client (`client/.env.development`):
 
@@ -63,7 +64,7 @@ npm run dev
 
 ### API + WebSocket (Node)
 
-The repo root [`package.json`](package.json) defines **`npm start`** (`node server/index.js`) and **`postinstall`** so Railway install **server** dependencies from the monorepo root. Set **`JWT_SECRET`**, **`ADMIN_EMAIL`**, **`ADMIN_PASSWORD`**, and optionally **`DATABASE_PATH`** on a persistent volume. **`PORT`** is provided by the platform.
+The repo root [`package.json`](package.json) defines **`npm start`** (`node server/index.js`) and **`postinstall`** so Railway install **server** dependencies from the monorepo root. Set **`JWT_SECRET`**, **`ADMIN_EMAIL`**, **`ADMIN_PASSWORD`**, and optionally **`DATABASE_PATH`** on a persistent volume. If the React app uses a **different** public URL than the API, set **`CORS_ORIGIN`** to that client origin (see [Configuration](#configuration)). **`PORT`** is provided by the platform.
 
 ### React client (separate Railway service)
 

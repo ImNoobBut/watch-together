@@ -10,6 +10,7 @@ import { createAuthRouter } from "./authRoutes.js";
 import { createAdminRouter } from "./adminRoutes.js";
 import { logger } from "./logger.js";
 import { auditLog } from "./audit.js";
+import { createCorsOptions } from "./corsOptions.js";
 
 if (!process.env.JWT_SECRET) {
   logger.warn("JWT_SECRET not set — using insecure development default");
@@ -29,7 +30,7 @@ app.get("/health", (_req, res) => res.json({ ok: true }));
 
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
-  cors: { origin: true, credentials: true },
+  cors: corsOptions,
 });
 
 /** @type {Map<string, ReturnType<typeof createRoomState>>} */
