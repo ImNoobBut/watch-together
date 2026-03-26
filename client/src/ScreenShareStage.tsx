@@ -93,6 +93,8 @@ export function ScreenShareStage({
     }
 
     const hostPCs = hostPCsRef.current;
+    const pendingIceByViewer = new Map<string, RTCIceCandidateInit[]>();
+    const streamForPeers = localStream;
     const viewerIds = peers
       .map((p) => p.socketId)
       .filter((id) => id !== mySocketId);
@@ -101,6 +103,7 @@ export function ScreenShareStage({
       if (!viewerIds.includes(id)) {
         pc.close();
         hostPCs.delete(id);
+        pendingIceByViewer.delete(id);
       }
     }
 
@@ -117,7 +120,20 @@ export function ScreenShareStage({
             type: "answer",
             sdp: msg.payload.sdp,
           });
+          const queued = pendingIceByViewer.get(msg.fromSocketId);
+          if (queued?.length) {
+            for (const candidate of queued) {
+              await pc.addIceCandidate(candidate);
+            }
+            pendingIceByViewer.delete(msg.fromSocketId);
+          }
         } else if (msg.payload.type === "ice" && msg.payload.candidate) {
+          if (!pc.remoteDescription) {
+            const queued = pendingIceByViewer.get(msg.fromSocketId) ?? [];
+            queued.push(msg.payload.candidate);
+            pendingIceByViewer.set(msg.fromSocketId, queued);
+            return;
+          }
           await pc.addIceCandidate(msg.payload.candidate);
         }
       } catch (err) {
@@ -131,7 +147,7 @@ export function ScreenShareStage({
       if (hostPCs.has(vid)) return;
       const pc = new RTCPeerConnection({ iceServers: getIceServers() });
       hostPCs.set(vid, pc);
-      localStream.getTracks().forEach((t) => pc.addTrack(t, localStream));
+      streamForPeers.getTracks().forEach((t) => pc.addTrack(t, streamForPeers));
       pc.onicecandidate = (ev) => {
         if (ev.candidate) {
           socket.emit("rtc_signal", {
@@ -176,6 +192,7 @@ export function ScreenShareStage({
 
     setRemoteReady(false);
     const pc = new RTCPeerConnection({ iceServers: getIceServers() });
+    const pendingIce: RTCIceCandidateInit[] = [];
 
     pc.ontrack = (ev) => {
       const el = remoteVideoRef.current;
@@ -204,6 +221,12 @@ export function ScreenShareStage({
             type: "offer",
             sdp: msg.payload.sdp,
           });
+          if (pendingIce.length) {
+            for (const candidate of pendingIce) {
+              await pc.addIceCandidate(candidate);
+            }
+            pendingIce.length = 0;
+          }
           const answer = await pc.createAnswer();
           await pc.setLocalDescription(answer);
           const sdp = pc.localDescription?.sdp;
@@ -214,6 +237,10 @@ export function ScreenShareStage({
             });
           }
         } else if (msg.payload.type === "ice" && msg.payload.candidate) {
+          if (!pc.remoteDescription) {
+            pendingIce.push(msg.payload.candidate);
+            return;
+          }
           await pc.addIceCandidate(msg.payload.candidate);
         }
       } catch (err) {
