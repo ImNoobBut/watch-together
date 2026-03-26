@@ -10,6 +10,61 @@ type RtcPayload =
   | { type: "ice"; candidate: RTCIceCandidateInit };
 type PeerConnState = RTCPeerConnectionState | "new";
 
+type SharedCaptureState = {
+  stream: MediaStream | null;
+  promise: Promise<MediaStream> | null;
+  consumers: number;
+  releaseTimer: number | null;
+};
+
+const sharedCaptureState: SharedCaptureState = {
+  stream: null,
+  promise: null,
+  consumers: 0,
+  releaseTimer: null,
+};
+
+function stopStreamTracks(stream: MediaStream | null) {
+  if (!stream) return;
+  stream.getTracks().forEach((t) => t.stop());
+}
+
+function resetSharedCaptureState(stopTracks: boolean) {
+  if (sharedCaptureState.releaseTimer != null) {
+    window.clearTimeout(sharedCaptureState.releaseTimer);
+    sharedCaptureState.releaseTimer = null;
+  }
+  if (stopTracks) {
+    stopStreamTracks(sharedCaptureState.stream);
+  }
+  sharedCaptureState.stream = null;
+  sharedCaptureState.promise = null;
+}
+
+function hasLiveVideoTrack(stream: MediaStream | null): boolean {
+  if (!stream) return false;
+  return stream.getVideoTracks().some((t) => t.readyState === "live");
+}
+
+async function getOrCreateSharedDisplayCapture(): Promise<MediaStream> {
+  if (hasLiveVideoTrack(sharedCaptureState.stream)) {
+    return sharedCaptureState.stream as MediaStream;
+  }
+  if (!sharedCaptureState.promise) {
+    sharedCaptureState.promise = navigator.mediaDevices
+      .getDisplayMedia({ video: true, audio: true })
+      .then((stream) => {
+        sharedCaptureState.stream = stream;
+        return stream;
+      })
+      .catch((err) => {
+        resetSharedCaptureState(false);
+        throw err;
+      });
+  }
+  return sharedCaptureState.promise;
+}
+
 type Props = {
   socket: Socket;
   mySocketId: string;
@@ -50,22 +105,25 @@ export function ScreenShareStage({
   useEffect(() => {
     if (!isHost) return;
     let cancelled = false;
-    let stream: MediaStream | null = null;
+    let mountedStream: MediaStream | null = null;
+    sharedCaptureState.consumers += 1;
+    if (sharedCaptureState.releaseTimer != null) {
+      window.clearTimeout(sharedCaptureState.releaseTimer);
+      sharedCaptureState.releaseTimer = null;
+    }
 
     void (async () => {
       try {
-        stream = await navigator.mediaDevices.getDisplayMedia({
-          video: true,
-          audio: true,
-        });
+        const stream = await getOrCreateSharedDisplayCapture();
+        mountedStream = stream;
         if (cancelled) {
-          stream.getTracks().forEach((t) => t.stop());
           return;
         }
         const [vt] = stream.getVideoTracks();
         if (vt) {
           vt.onended = () => {
-            stream?.getTracks().forEach((t) => t.stop());
+            stopStreamTracks(stream);
+            resetSharedCaptureState(false);
             socket.emit("unload_video");
           };
         }
@@ -74,14 +132,24 @@ export function ScreenShareStage({
         onError(
           e instanceof Error ? e.message : "Could not capture display or tab.",
         );
+        resetSharedCaptureState(false);
         socket.emit("unload_video");
       }
     })();
 
     return () => {
       cancelled = true;
-      if (stream) {
-        stream.getTracks().forEach((t) => t.stop());
+      if (mountedStream) {
+        mountedStream.getVideoTracks().forEach((t) => {
+          t.onended = null;
+        });
+      }
+      sharedCaptureState.consumers = Math.max(0, sharedCaptureState.consumers - 1);
+      if (sharedCaptureState.consumers === 0) {
+        sharedCaptureState.releaseTimer = window.setTimeout(() => {
+          if (sharedCaptureState.consumers !== 0) return;
+          resetSharedCaptureState(true);
+        }, 150);
       }
       setLocalStream(null);
     };
@@ -338,7 +406,8 @@ export function ScreenShareStage({
   }
 
   function stopSharing() {
-    localStream?.getTracks().forEach((t) => t.stop());
+    stopStreamTracks(localStream);
+    resetSharedCaptureState(false);
     setLocalStream(null);
     for (const [, pc] of hostPCsRef.current) {
       pc.close();
