@@ -538,9 +538,17 @@ io.on("connection", (socket) => {
     room.videoProvider = provider;
     room.videoSource = source;
     room.currentTime = 0;
-    room.isPlaying = false;
+
+    const shouldAutoplay =
+      provider === "youtube" ||
+      provider === "vimeo" ||
+      provider === "html5";
+    room.isPlaying = shouldAutoplay;
 
     io.to(roomId).emit("load_video", { provider, source });
+    if (shouldAutoplay) {
+      io.to(roomId).emit("play", { time: 0 });
+    }
   });
 
   socket.on("unload_video", () => {

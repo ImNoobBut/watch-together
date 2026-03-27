@@ -104,7 +104,7 @@ export async function createYoutubeAdapter(
 
       instance = new window.YT!.Player(el, {
         videoId: opts.source,
-        playerVars: { playsinline: 1, rel: 0, controls: 1 },
+        playerVars: { playsinline: 1, rel: 0, controls: 1, autoplay: 1 },
         events: {
           onReady: (e) => {
             if (destroyed) return;

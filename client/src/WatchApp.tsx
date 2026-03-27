@@ -1035,8 +1035,9 @@ export function WatchApp({ token, onLogout, isAdmin }: Props) {
               </button>
             </form>
             <p id="url-load-hint" className="muted small" style={{ marginTop: "0.35rem" }}>
-              Use a YouTube or Vimeo link, or a direct file URL ending in .mp4, .webm, or .ogg. After
-              loading, press play on the on-screen player (required by most browsers).
+              Use a YouTube or Vimeo link, or a direct file URL ending in .mp4, .webm, or .ogg. New
+              videos start automatically when possible; on some phones or browsers you may need to
+              tap the player if autoplay is blocked.
             </p>
             {hostToggle}
             {isHost && (
