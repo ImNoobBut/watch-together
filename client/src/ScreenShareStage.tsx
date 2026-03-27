@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { Socket } from "socket.io-client";
 import { getIceServers } from "./webrtc/iceServers";
+import { logClientError } from "./logger";
 
 export type ScreenSharePeer = { socketId: string };
 
@@ -152,9 +153,11 @@ export function ScreenShareStage({
         }
         setLocalStream(stream);
       } catch (e) {
-        onError(
-          e instanceof Error ? e.message : "Could not capture display or tab.",
-        );
+        logClientError("screen_share_capture_failed", {
+          error: e instanceof Error ? e.message : String(e),
+          audioOnly,
+        });
+        onError("Could not start screen sharing. Please try again.");
         resetSharedCaptureState(false);
         socket.emit("unload_video");
       }
@@ -240,7 +243,10 @@ export function ScreenShareStage({
           await pc.addIceCandidate(msg.payload.candidate);
         }
       } catch (err) {
-        console.error(err);
+        logClientError("screen_share_host_signal_failed", {
+          viewerSocketId: msg.fromSocketId,
+          error: err instanceof Error ? err.message : String(err),
+        });
       }
     };
 
@@ -276,15 +282,13 @@ export function ScreenShareStage({
       };
       pc.oniceconnectionstatechange = () => {
         if (pc.iceConnectionState === "failed") {
-          onError(
-            "A viewer could not receive screen share. TURN may be required in production.",
-          );
+          onError("A participant could not receive the screen share.");
         }
       };
       pc.onconnectionstatechange = () => {
         setHostPeerStates((prev) => ({ ...prev, [vid]: pc.connectionState }));
         if (pc.connectionState === "failed") {
-          onError("A viewer WebRTC connection failed during screen share.");
+          onError("Screen sharing connection was interrupted.");
         }
       };
       try {
@@ -298,7 +302,10 @@ export function ScreenShareStage({
           });
         }
       } catch (err) {
-        console.error(err);
+        logClientError("screen_share_offer_failed", {
+          viewerSocketId: vid,
+          error: err instanceof Error ? err.message : String(err),
+        });
       }
     }
 
@@ -340,7 +347,7 @@ export function ScreenShareStage({
       } catch {
         if (!disposed) {
           setRemoteBlocked(true);
-          onError("Browser blocked autoplay. Click the video area to start playback.");
+          onError("Playback is blocked. Press play to continue.");
         }
       }
     };
@@ -372,13 +379,13 @@ export function ScreenShareStage({
     };
     pc.oniceconnectionstatechange = () => {
       if (pc.iceConnectionState === "failed") {
-        onError("Screen share connection failed. TURN may be required in production.");
+        onError("Screen share connection failed. Please try again.");
       }
     };
     pc.onconnectionstatechange = () => {
       setViewerConnState(pc.connectionState);
       if (pc.connectionState === "failed") {
-        onError("WebRTC connection failed. Ask host to restart sharing.");
+        onError("Screen share disconnected. Please ask the host to restart sharing.");
       }
     };
 
@@ -416,7 +423,10 @@ export function ScreenShareStage({
           await pc.addIceCandidate(msg.payload.candidate);
         }
       } catch (err) {
-        console.error(err);
+        logClientError("screen_share_viewer_signal_failed", {
+          hostSocketId,
+          error: err instanceof Error ? err.message : String(err),
+        });
       }
     };
 
@@ -502,7 +512,7 @@ export function ScreenShareStage({
         >
           {`Peers: ${connectedCount} connected`}
           {connectingCount > 0 ? `, ${connectingCount} connecting` : ""}
-          {failedCount > 0 ? `, ${failedCount} failed` : ""}
+          {failedCount > 0 ? `, ${failedCount} issue${failedCount > 1 ? "s" : ""}` : ""}
         </div>
         <div
           style={{
@@ -518,8 +528,8 @@ export function ScreenShareStage({
         >
           <span className="muted small" style={{ flex: 1, minWidth: 120 }}>
             {audioOnly
-              ? "Audio-only mode: choose a browser tab and enable tab audio."
-              : "Sharing includes audio when the browser offers it (e.g. Chrome: pick a tab and check \"Share tab audio\")."}
+              ? "Audio-only mode is enabled for this share."
+              : "Screen share may include audio depending on browser support."}
           </span>
           <button type="button" onClick={stopSharing}>
             Stop sharing
@@ -544,7 +554,7 @@ export function ScreenShareStage({
           border: `1px solid ${viewerBadge.border}`,
         }}
       >
-        {`WebRTC: ${viewerConnState}`}
+        {`Connection: ${viewerConnState}`}
       </div>
       {!remoteReady && (
         <div className="synced-player-placeholder">
@@ -574,7 +584,7 @@ export function ScreenShareStage({
                 setRemoteBlocked(false);
               },
               () => {
-                onError("Playback is still blocked by the browser. Use the play control.");
+                onError("Playback is still blocked. Use the play button to continue.");
               },
             );
           }}

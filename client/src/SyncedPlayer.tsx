@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { Socket } from "socket.io-client";
 import { createVideoAdapter } from "./adapters";
 import type { VideoAdapter } from "./adapters/types";
+import { logClientError } from "./logger";
 import type { VideoProvider } from "./resolveVideoUrl";
 
 export type SyncedVideo = {
@@ -117,10 +118,13 @@ export function SyncedPlayer({
         lastAppliedRef.current = { time: pb.time, isPlaying: pb.isPlaying };
         if (!cancelled) reportLoad("ready");
       } catch (err) {
-        console.error(err);
+        logClientError("video_adapter_load_failed", {
+          provider: video.provider,
+          source: video.source,
+          error: err instanceof Error ? err.message : String(err),
+        });
         el.innerHTML = "";
-        const msg =
-          err instanceof Error ? err.message : "Could not load this video.";
+        const msg = "Could not load this video. Please try another source.";
         if (!cancelled) reportLoad("error", msg);
       }
     })();

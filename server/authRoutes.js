@@ -13,6 +13,13 @@ const loginAttempts = new Map();
 const WINDOW_MS = 60_000;
 const MAX_ATTEMPTS = 20;
 
+function maskEmail(email) {
+  if (typeof email !== "string" || !email.includes("@")) return "redacted";
+  const [local, domain] = email.trim().toLowerCase().split("@");
+  if (!local || !domain) return "redacted";
+  return `${local.slice(0, 1)}***@${domain}`;
+}
+
 function rateLimitIp(ip) {
   const now = Date.now();
   let e = loginAttempts.get(ip);
@@ -60,7 +67,7 @@ export function createAuthRouter() {
       const sub = `user:${id}`;
       const token = signToken({ sub, role: "user", displayName });
       auditLog(sub, "auth_register", { email });
-      logger.info({ sub, email }, "auth_register_ok");
+      logger.info({ sub, emailMasked: maskEmail(email) }, "auth_register_ok");
       return res.json({ token, user: { sub, role: "user", displayName, email } });
     } catch (e) {
       if (String(e?.message || "").includes("UNIQUE")) {
@@ -92,7 +99,7 @@ export function createAuthRouter() {
     const user = findUserByEmail(email);
     if (!user || !bcrypt.compareSync(password, user.password_hash)) {
       auditLog(null, "auth_login_fail", { email });
-      logger.info({ email }, "auth_login_fail");
+      logger.info({ emailMasked: maskEmail(email) }, "auth_login_fail");
       return res.status(401).json({ error: "Invalid credentials" });
     }
 

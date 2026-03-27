@@ -65,6 +65,20 @@ function getRoomsSnapshot() {
 
 app.use("/api/auth", createAuthRouter());
 app.use("/api/admin", createAdminRouter(io, getRoomsSnapshot));
+app.use((err, req, res, _next) => {
+  const requestId = req.headers["x-request-id"] || null;
+  logger.error(
+    {
+      err,
+      method: req.method,
+      path: req.path,
+      requestId,
+    },
+    "http_unhandled_error"
+  );
+  if (res.headersSent) return;
+  res.status(500).json({ error: "Internal server error" });
+});
 
 io.use((socket, next) => {
   const token = socket.handshake.auth?.token;
@@ -595,6 +609,27 @@ io.on("connection", (socket) => {
 const PORT = Number(process.env.PORT) || 3001;
 // Bind all interfaces so platform proxies (e.g. Railway) can reach the process; localhost-only breaks edge routing.
 const HOST = process.env.LISTEN_HOST || "0.0.0.0";
+
+let shuttingDown = false;
+function shutdownAfterFatal(trigger) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  logger.fatal({ trigger }, "process_fatal_shutdown");
+  setTimeout(() => {
+    process.exit(1);
+  }, 250).unref();
+}
+
+process.on("uncaughtException", (err) => {
+  logger.fatal({ err }, "uncaught_exception");
+  shutdownAfterFatal("uncaught_exception");
+});
+
+process.on("unhandledRejection", (reason) => {
+  logger.fatal({ reason }, "unhandled_rejection");
+  shutdownAfterFatal("unhandled_rejection");
+});
+
 httpServer.listen(PORT, HOST, () => {
   logger.info({ port: PORT, host: HOST }, "server_listening");
 });

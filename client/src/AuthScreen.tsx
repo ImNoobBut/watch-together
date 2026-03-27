@@ -51,7 +51,7 @@ export function AuthScreen({ onAuthed }: Props) {
         setError("Invalid server response");
       }
     } catch {
-      setError("Network error — is the server running?");
+      setError("Could not connect. Please try again.");
     } finally {
       setBusy(false);
     }

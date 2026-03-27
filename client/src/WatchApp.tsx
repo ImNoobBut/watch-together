@@ -408,7 +408,7 @@ export function WatchApp({ token, onLogout, isAdmin }: Props) {
         onLogout();
         return;
       }
-      setBanner("Could not reach the server. Is it running?");
+      setBanner("Could not connect. Please try again.");
     };
 
     socket.on("connect", onConnect);
@@ -898,8 +898,8 @@ export function WatchApp({ token, onLogout, isAdmin }: Props) {
           )}
           {video?.provider === "screenshare" && !isHost && (
             <p className="hint">
-              Live screen share from the host. If video never appears, try a TURN
-              server (see README) or fewer participants.
+              Live screen share from the host. If it does not start, ask the host to
+              restart sharing.
             </p>
           )}
 
