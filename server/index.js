@@ -162,13 +162,27 @@ function buildPayload(socket, room) {
   };
 }
 
-function isHost(socketId, room) {
-  return room.hostSocketId === socketId;
+function isRoomHost(socket, room) {
+  if (room.hostUserSub) {
+    return (
+      socket.data.userSub === room.hostUserSub &&
+      room.hostSocketId === socket.id
+    );
+  }
+  return room.hostSocketId === socket.id;
 }
 
-function canControl(socketId, room) {
+function canControl(socket, room) {
   if (!room.onlyHostControls) return true;
-  return isHost(socketId, room);
+  return isRoomHost(socket, room);
+}
+
+/** When the canonical host reconnects, wire their new socket id for clients / WebRTC. */
+function syncCanonicalHostSocket(socket, room, roomId) {
+  if (!room.hostUserSub || socket.data.userSub !== room.hostUserSub) return;
+  if (room.hostSocketId === socket.id) return;
+  room.hostSocketId = socket.id;
+  socket.to(roomId).emit("host_changed", { hostSocketId: socket.id });
 }
 
 function leaveRoom(socket, notifyOthers = true) {
@@ -202,11 +216,20 @@ function leaveRoom(socket, notifyOthers = true) {
       room.isPlaying = false;
       io.to(roomId).emit("video_unloaded");
     }
-    const next = roomSockets.values().next().value;
-    if (next) {
-      room.hostSocketId = next;
-      io.to(roomId).emit("host_changed", { hostSocketId: next });
-      auditLog(null, "host_transferred", { roomId, newHostSocketId: next });
+    const isCanonicalHost =
+      room.hostUserSub && socket.data.userSub === room.hostUserSub;
+    if (isCanonicalHost) {
+      room.hostSocketId = null;
+      io.to(roomId).emit("host_changed", { hostSocketId: null });
+      auditLog(null, "host_offline", { roomId, hostUserSub: room.hostUserSub });
+      logger.info({ roomId, hostUserSub: room.hostUserSub }, "host_offline");
+    } else {
+      const next = roomSockets.values().next().value;
+      if (next) {
+        room.hostSocketId = next;
+        io.to(roomId).emit("host_changed", { hostSocketId: next });
+        auditLog(null, "host_transferred", { roomId, newHostSocketId: next });
+      }
     }
   }
 
@@ -281,7 +304,7 @@ io.on("connection", (socket) => {
     let roomId = genRoomId();
     while (rooms.has(roomId)) roomId = genRoomId();
 
-    const room = createRoomState(roomId, socket.id);
+    const room = createRoomState(roomId, socket.id, socket.data.userSub);
     room.joinMode = joinMode;
     room.joinPasswordHash =
       joinMode === "password" ? bcrypt.hashSync(passwordRaw, 10) : null;
@@ -352,6 +375,8 @@ io.on("connection", (socket) => {
     socket.join(roomId);
     socketRoom.set(socket.id, roomId);
 
+    syncCanonicalHostSocket(socket, room, roomId);
+
     socket.to(roomId).emit("user_joined", {
       socketId: socket.id,
       username: socket.data.displayName,
@@ -379,7 +404,7 @@ io.on("connection", (socket) => {
     const room = roomId ? rooms.get(roomId) : null;
     if (!room) return;
 
-    if (!isHost(socket.id, room)) {
+    if (!isRoomHost(socket, room)) {
       socket.emit("control_denied", { reason: "not_host" });
       return;
     }
@@ -415,7 +440,7 @@ io.on("connection", (socket) => {
     const room = roomId ? rooms.get(roomId) : null;
     if (!room) return;
 
-    if (!isHost(socket.id, room)) {
+    if (!isRoomHost(socket, room)) {
       socket.emit("control_denied", { reason: "not_host" });
       return;
     }
@@ -425,7 +450,10 @@ io.on("connection", (socket) => {
     if (!targetSocketId || targetSocketId === socket.id) return;
     if (!socketsInSameRoom(roomId, socket.id, targetSocketId)) return;
 
+    const target = io.sockets.sockets.get(targetSocketId);
+    if (!target) return;
     room.hostSocketId = targetSocketId;
+    room.hostUserSub = target.data.userSub ?? null;
     io.to(roomId).emit("host_changed", { hostSocketId: targetSocketId });
     auditLog(socket.data.userSub, "host_transferred_manual", {
       roomId,
@@ -442,7 +470,7 @@ io.on("connection", (socket) => {
     const room = roomId ? rooms.get(roomId) : null;
     if (!room) return;
 
-    if (!isHost(socket.id, room)) {
+    if (!isRoomHost(socket, room)) {
       socket.emit("control_denied", { reason: "not_host" });
       return;
     }
@@ -471,7 +499,7 @@ io.on("connection", (socket) => {
     const room = roomId ? rooms.get(roomId) : null;
     if (!room) return;
 
-    if (!canControl(socket.id, room)) {
+    if (!canControl(socket, room)) {
       socket.emit("control_denied", { reason: "only_host" });
       auditLog(socket.data.userSub, "playback_control_denied", {
         roomId,
@@ -485,7 +513,7 @@ io.on("connection", (socket) => {
       typeof data?.source === "string" ? data.source.trim() : "";
     if (!isValidProvider(provider) || !source) return;
 
-    if (provider === "screenshare" && !isHost(socket.id, room)) {
+    if (provider === "screenshare" && !isRoomHost(socket, room)) {
       socket.emit("control_denied", { reason: "only_host" });
       auditLog(socket.data.userSub, "playback_control_denied", {
         roomId,
@@ -507,7 +535,7 @@ io.on("connection", (socket) => {
     const room = roomId ? rooms.get(roomId) : null;
     if (!room) return;
 
-    if (!canControl(socket.id, room)) {
+    if (!canControl(socket, room)) {
       socket.emit("control_denied", { reason: "only_host" });
       auditLog(socket.data.userSub, "playback_control_denied", {
         roomId,
@@ -552,7 +580,7 @@ io.on("connection", (socket) => {
 
     if (room.videoProvider === "screenshare") return;
 
-    if (!canControl(socket.id, room)) {
+    if (!canControl(socket, room)) {
       socket.emit("control_denied", { reason: "only_host" });
       auditLog(socket.data.userSub, "playback_control_denied", {
         roomId,
@@ -576,7 +604,7 @@ io.on("connection", (socket) => {
 
     if (room.videoProvider === "screenshare") return;
 
-    if (!canControl(socket.id, room)) {
+    if (!canControl(socket, room)) {
       socket.emit("control_denied", { reason: "only_host" });
       auditLog(socket.data.userSub, "playback_control_denied", {
         roomId,
@@ -600,7 +628,7 @@ io.on("connection", (socket) => {
 
     if (room.videoProvider === "screenshare") return;
 
-    if (!canControl(socket.id, room)) {
+    if (!canControl(socket, room)) {
       socket.emit("control_denied", { reason: "only_host" });
       auditLog(socket.data.userSub, "playback_control_denied", {
         roomId,
@@ -621,7 +649,7 @@ io.on("connection", (socket) => {
     const room = roomId ? rooms.get(roomId) : null;
     if (!room) return;
 
-    if (!isHost(socket.id, room)) {
+    if (!isRoomHost(socket, room)) {
       socket.emit("control_denied", { reason: "not_host" });
       return;
     }

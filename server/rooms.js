@@ -10,10 +10,12 @@ export function isValidProvider(p) {
   return typeof p === "string" && VALID_PROVIDERS.has(p);
 }
 
-export function createRoomState(roomId, hostSocketId) {
+export function createRoomState(roomId, hostSocketId, hostUserSub) {
   return {
     roomId,
     hostSocketId,
+    /** @type {string | null} JWT subject of the canonical host (survives reconnect) */
+    hostUserSub: hostUserSub ?? null,
     /** @type {"open" | "password"} */
     joinMode: "open",
     /** @type {string | null} bcrypt hash for password-protected rooms */

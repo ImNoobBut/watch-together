@@ -33,7 +33,7 @@ export type Peer = {
 
 type RoomPayload = {
   roomId: string;
-  hostSocketId: string;
+  hostSocketId: string | null;
   onlyHostControls: boolean;
   videoProvider: string | null;
   videoSource: string | null;
@@ -108,6 +108,7 @@ export function WatchApp({ token, onLogout, isAdmin }: Props) {
   const peersRef = useRef(peers);
   const pendingRejoinRoomIdRef = useRef<string | null>(null);
   const pendingRejoinPasswordRef = useRef<string>("");
+  const urlAutoJoinDoneRef = useRef(false);
   const hostSocketIdRef = useRef<string | null>(hostSocketId);
   const activityIdRef = useRef(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -382,6 +383,18 @@ export function WatchApp({ token, onLogout, isAdmin }: Props) {
           roomId: rid,
           password: pendingRejoinPasswordRef.current || undefined,
         });
+      } else if (!urlAutoJoinDoneRef.current) {
+        const params = new URLSearchParams(window.location.search);
+        const q = params.get("room")?.trim();
+        if (q) {
+          urlAutoJoinDoneRef.current = true;
+          const roomIdUpper = q.toUpperCase();
+          pendingRejoinRoomIdRef.current = roomIdUpper;
+          setLobbyBusy(true);
+          setLobbyAction("join");
+          setBanner("Joining room…");
+          socket.emit("join_room", { roomId: roomIdUpper });
+        }
       }
       socket.emit("get_public_rooms");
     };
@@ -538,9 +551,20 @@ export function WatchApp({ token, onLogout, isAdmin }: Props) {
       setPlayback((prev) => ({ ...prev, time }));
     const onHostControls = ({ enabled }: { enabled: boolean }) =>
       setOnlyHostControls(enabled);
-    const onHostChanged = ({ hostSocketId: id }: { hostSocketId: string }) => {
+    const onHostChanged = ({
+      hostSocketId: id,
+    }: {
+      hostSocketId: string | null;
+    }) => {
       const prevHostId = hostSocketIdRef.current;
       setHostSocketId(id);
+
+      if (id === null) {
+        pushActivity("Host disconnected — waiting for host to reconnect.");
+        pendingHostTransferTargetRef.current = null;
+        setTransferTarget("");
+        return;
+      }
 
       const newHost = peersRef.current.find((p) => p.socketId === id);
       const hostLabel = newHost?.displayName ?? `Host ${id.slice(0, 6)}…`;

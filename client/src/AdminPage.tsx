@@ -6,7 +6,7 @@ import "./index.css";
 
 type RoomRow = {
   roomId: string;
-  hostSocketId: string;
+  hostSocketId: string | null;
   memberCount: number;
   maxUsers: number | null;
   onlyHostControls: boolean;
@@ -138,12 +138,16 @@ export function AdminPage({ token }: Props) {
                   <td>{row.roomId}</td>
                   <td>{row.memberCount}</td>
                   <td>{row.maxUsers == null ? "∞" : row.maxUsers}</td>
-                  <td className="mono">{row.hostSocketId}</td>
+                  <td className="mono">{row.hostSocketId ?? "—"}</td>
                   <td>
                     <button
                       type="button"
-                      disabled={busy}
-                      onClick={() => void disconnectSocket(row.hostSocketId)}
+                      disabled={busy || !row.hostSocketId}
+                      onClick={() =>
+                        row.hostSocketId
+                          ? void disconnectSocket(row.hostSocketId)
+                          : undefined
+                      }
                     >
                       Disconnect host
                     </button>
