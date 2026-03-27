@@ -32,6 +32,12 @@ app.get("/health", (_req, res) => res.json({ ok: true }));
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
   cors: corsOptions,
+  // Balanced mobile-friendly heartbeat + fallback transport strategy.
+  pingInterval: 20000,
+  pingTimeout: 30000,
+  connectTimeout: 30000,
+  transports: ["websocket", "polling"],
+  allowUpgrades: true,
 });
 
 /** @type {Map<string, ReturnType<typeof createRoomState>>} */

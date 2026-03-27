@@ -57,6 +57,11 @@ type Props = {
   isAdmin?: boolean;
 };
 
+function isInstagramWebViewUA(ua: string): boolean {
+  const s = ua.toLowerCase();
+  return s.includes("instagram") && (s.includes("; wv)") || s.includes(" wv "));
+}
+
 export function WatchApp({ token, onLogout, isAdmin }: Props) {
   const [socket, setSocket] = useState<Socket | null>(null);
   const [myId, setMyId] = useState<string | null>(null);
@@ -93,6 +98,10 @@ export function WatchApp({ token, onLogout, isAdmin }: Props) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const activeLocalBlobUrlRef = useRef<string | null>(null);
   const pendingHostTransferTargetRef = useRef<string | null>(null);
+  const lastConnectedAtRef = useRef(0);
+  const lastDisconnectReasonRef = useRef<string | null>(null);
+  const lastConnectErrorRef = useRef<string | null>(null);
+  const reconnectGuardUntilRef = useRef(0);
 
   phaseRef.current = phase;
   roomIdRef.current = roomId;
@@ -105,6 +114,10 @@ export function WatchApp({ token, onLogout, isAdmin }: Props) {
   );
   const iosVideoRef = useRef<HTMLVideoElement | null>(null);
   const iosVideoDetachRef = useRef<(() => void) | null>(null);
+  const isInstagramWebView = useMemo(() => {
+    if (typeof navigator === "undefined") return false;
+    return isInstagramWebViewUA(navigator.userAgent || "");
+  }, []);
 
   const pushActivity = useCallback((text: string) => {
     const id = ++activityIdRef.current;
@@ -252,12 +265,36 @@ export function WatchApp({ token, onLogout, isAdmin }: Props) {
   }, [playerFullscreen]);
 
   useEffect(() => {
-    const s = io(socketUrl(), { auth: { token } });
+    const reconnectProfile = isInstagramWebView
+      ? {
+          timeout: 15000,
+          reconnectionDelay: 1000,
+          reconnectionDelayMax: 12000,
+          randomizationFactor: 0.5,
+        }
+      : {
+          timeout: 12000,
+          reconnectionDelay: 800,
+          reconnectionDelayMax: 8000,
+          randomizationFactor: 0.35,
+        };
+    const s = io(socketUrl(), {
+      auth: { token },
+      transports: ["websocket", "polling"],
+      upgrade: true,
+      autoConnect: true,
+      reconnection: true,
+      reconnectionAttempts: Infinity,
+      timeout: reconnectProfile.timeout,
+      reconnectionDelay: reconnectProfile.reconnectionDelay,
+      reconnectionDelayMax: reconnectProfile.reconnectionDelayMax,
+      randomizationFactor: reconnectProfile.randomizationFactor,
+    });
     setSocket(s);
     return () => {
       s.disconnect();
     };
-  }, [token]);
+  }, [isInstagramWebView, token]);
 
   const resetRoomStateToLobby = useCallback(() => {
     if (activeLocalBlobUrlRef.current) {
@@ -317,6 +354,9 @@ export function WatchApp({ token, onLogout, isAdmin }: Props) {
     if (!socket) return;
 
     const onConnect = () => {
+      lastConnectedAtRef.current = Date.now();
+      lastDisconnectReasonRef.current = null;
+      lastConnectErrorRef.current = null;
       setMyId(socket.id ?? null);
       const rid = pendingRejoinRoomIdRef.current;
       if (rid) {
@@ -328,6 +368,7 @@ export function WatchApp({ token, onLogout, isAdmin }: Props) {
     };
 
     const onDisconnect = (reason: string) => {
+      lastDisconnectReasonRef.current = reason;
       setMyId(socket.id ?? null);
       const wasRoom = phaseRef.current === "room";
       const rid = roomIdRef.current;
@@ -358,6 +399,7 @@ export function WatchApp({ token, onLogout, isAdmin }: Props) {
 
     const onConnectError = (err: Error) => {
       const m = err?.message || "";
+      lastConnectErrorRef.current = m || "connect_error";
       if (
         m.includes("INVALID_TOKEN") ||
         m.includes("UNAUTHORIZED") ||
@@ -381,6 +423,51 @@ export function WatchApp({ token, onLogout, isAdmin }: Props) {
       socket.off("connect_error", onConnectError);
     };
   }, [socket, onLogout, resetRoomStateToLobby, teardownPlayerFullscreen]);
+
+  useEffect(() => {
+    if (!socket) return;
+
+    const staleMs = isInstagramWebView ? 45000 : 60000;
+    const minReconnectGapMs = 1500;
+    const tryReconnect = (reason: string) => {
+      const now = Date.now();
+      if (now < reconnectGuardUntilRef.current) return;
+      reconnectGuardUntilRef.current = now + minReconnectGapMs;
+
+      if (socket.disconnected) {
+        socket.connect();
+        if (pendingRejoinRoomIdRef.current) {
+          setBanner(`Reconnecting (${reason})…`);
+        }
+        return;
+      }
+
+      if (lastConnectedAtRef.current > 0 && now - lastConnectedAtRef.current > staleMs) {
+        socket.disconnect();
+        socket.connect();
+        if (pendingRejoinRoomIdRef.current) {
+          setBanner(`Refreshing connection (${reason})…`);
+        }
+      }
+    };
+
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") {
+        tryReconnect("app resumed");
+      }
+    };
+    const onFocus = () => tryReconnect("window focus");
+    const onPageShow = () => tryReconnect("page restore");
+
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("focus", onFocus);
+    window.addEventListener("pageshow", onPageShow);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("focus", onFocus);
+      window.removeEventListener("pageshow", onPageShow);
+    };
+  }, [isInstagramWebView, socket]);
 
   const reportMediaError = useCallback((message: string) => {
     setBanner(message);
