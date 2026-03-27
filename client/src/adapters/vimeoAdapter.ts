@@ -1,6 +1,7 @@
 import Player from "@vimeo/player";
 import { createEmitCooldown } from "./emitCooldown";
 import type { CreateAdapterOptions, VideoAdapter } from "./types";
+import { withTimeout } from "./withTimeout";
 
 export async function createVimeoAdapter(
   opts: CreateAdapterOptions
@@ -18,17 +19,11 @@ export async function createVimeoAdapter(
 
     mount(container: HTMLElement) {
       container.innerHTML = "";
-      if (opts.audioOnly) {
-        const note = document.createElement("div");
-        note.className = "synced-player-placeholder";
-        note.textContent = "Audio-only mode: Vimeo video is hidden.";
-        container.appendChild(note);
-      }
       const div = document.createElement("div");
-      div.style.width = opts.audioOnly ? "1px" : "100%";
-      div.style.height = opts.audioOnly ? "1px" : "100%";
-      div.style.opacity = opts.audioOnly ? "0.01" : "1";
-      div.style.pointerEvents = opts.audioOnly ? "none" : "auto";
+      div.style.width = "100%";
+      div.style.height = "100%";
+      div.style.opacity = "1";
+      div.style.pointerEvents = "auto";
       container.appendChild(div);
 
       const id = Number(opts.source);
@@ -53,6 +48,15 @@ export async function createVimeoAdapter(
       });
     },
 
+    async waitUntilReady() {
+      if (!player) throw new Error("No Vimeo player.");
+      await withTimeout(
+        player.ready(),
+        30_000,
+        "Vimeo player did not load in time.",
+      );
+    },
+
     destroy() {
       if (player) {
         void player.destroy().catch(() => {});
@@ -69,7 +73,12 @@ export async function createVimeoAdapter(
     async applyPlay(time: number) {
       if (!player) return;
       await player.setCurrentTime(time);
-      await player.play().catch(() => {});
+      await player.play().catch((e: unknown) => {
+        const detail = e instanceof Error ? e.message : String(e);
+        opts.onPlaybackError?.(
+          `Playback could not start (${detail}). Try pressing play on the controls.`,
+        );
+      });
       emitCooldown.bump();
     },
 

@@ -12,6 +12,13 @@ export type ResolveResult =
 function tryParseUrl(raw: string): URL | null {
   const t = raw.trim();
   if (!t) return null;
+
+  if (typeof URL !== "undefined" && typeof URL.canParse === "function") {
+    if (!URL.canParse(t) && !URL.canParse(`https://${t}`)) {
+      return null;
+    }
+  }
+
   try {
     return new URL(t);
   } catch {
@@ -23,31 +30,47 @@ function tryParseUrl(raw: string): URL | null {
   }
 }
 
+/** youtube.com, m.youtube.com, music.youtube.com, youtube-nocookie.com, etc. */
+function isYouTubeWebHost(host: string): boolean {
+  return (
+    host.endsWith("youtube.com") || host.endsWith("youtube-nocookie.com")
+  );
+}
+
 function extractYouTubeId(url: URL): string | null {
-  const host = url.hostname.replace(/^www\./, "");
+  const host = url.hostname.replace(/^www\./, "").toLowerCase();
+
   if (host === "youtu.be") {
     const id = url.pathname.split("/").filter(Boolean)[0];
     return id && /^[\w-]{11}$/.test(id) ? id : null;
   }
-  if (host.endsWith("youtube.com")) {
-    if (url.pathname.startsWith("/shorts/")) {
-      const id = url.pathname.split("/")[2];
-      return id && /^[\w-]{11}$/.test(id) ? id : null;
-    }
-    const v = url.searchParams.get("v");
-    if (v && /^[\w-]{11}$/.test(v)) return v;
-    const embed = url.pathname.match(/^\/embed\/([\w-]{11})/);
-    if (embed) return embed[1];
+
+  if (!isYouTubeWebHost(host)) return null;
+
+  if (url.pathname.startsWith("/shorts/")) {
+    const id = url.pathname.split("/")[2];
+    return id && /^[\w-]{11}$/.test(id) ? id : null;
   }
+
+  if (url.pathname.startsWith("/live/")) {
+    const id = url.pathname.split("/")[2];
+    return id && /^[\w-]{11}$/.test(id) ? id : null;
+  }
+
+  const v = url.searchParams.get("v");
+  if (v && /^[\w-]{11}$/.test(v)) return v;
+
+  const embed = url.pathname.match(/^\/embed\/([\w-]{11})/);
+  if (embed) return embed[1];
+
   return null;
 }
 
 function extractVimeoId(url: URL): string | null {
   const host = url.hostname.replace(/^www\./, "");
   if (!host.endsWith("vimeo.com")) return null;
-  const parts = url.pathname.split("/").filter(Boolean);
-  const id = parts[0];
-  if (id && /^\d+$/.test(id)) return id;
+  const m = url.pathname.match(/\/(\d{6,})(?:\/|$)/);
+  if (m) return m[1];
   return null;
 }
 
@@ -90,6 +113,12 @@ function facebookPluginEmbedSource(url: URL): string | null {
 
 const DIRECT_EXT = /\.(mp4|webm|ogg)(\?.*)?$/i;
 
+function looksLikeDirectMediaUrl(url: URL): boolean {
+  const pathOrHref = `${url.pathname}${url.search}`;
+  if (DIRECT_EXT.test(url.pathname) || DIRECT_EXT.test(url.href)) return true;
+  return DIRECT_EXT.test(pathOrHref);
+}
+
 export function resolveVideoUrl(input: string): ResolveResult {
   const trimmed = input.trim();
   if (!trimmed) return { ok: false, reason: "Empty URL" };
@@ -109,13 +138,17 @@ export function resolveVideoUrl(input: string): ResolveResult {
   const fb = facebookPluginEmbedSource(url);
   if (fb) return { ok: true, provider: "iframe", source: fb };
 
-  if (DIRECT_EXT.test(url.pathname) || DIRECT_EXT.test(url.href)) {
+  if (looksLikeDirectMediaUrl(url)) {
     return { ok: true, provider: "html5", source: url.href };
   }
 
   const proto = url.protocol.toLowerCase();
   if (proto === "http:" || proto === "https:") {
-    return { ok: true, provider: "iframe", source: url.href };
+    return {
+      ok: false,
+      reason:
+        "Unsupported URL. Use YouTube, Vimeo, a direct .mp4/.webm/.ogg link, or upload a video file.",
+    };
   }
 
   return { ok: false, reason: "Unsupported URL" };

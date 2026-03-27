@@ -9,6 +9,8 @@ export type UserVideoEvent =
 export interface VideoAdapter {
   readonly provider: VideoProvider;
   mount(container: HTMLElement): void;
+  /** Resolve when the player can accept initial sync; reject on load/timeout/abort. */
+  waitUntilReady(): Promise<void>;
   destroy(): void;
   setSuppressEmit(value: boolean): void;
   applyPlay(time: number): Promise<void>;
@@ -18,8 +20,11 @@ export interface VideoAdapter {
 
 export type CreateAdapterOptions = {
   source: string;
-  audioOnly?: boolean;
   onUserEvent: (e: UserVideoEvent) => void;
+  /** HTML5 only: decode/network failure */
+  onMediaError?: (message: string) => void;
+  /** HTML5 / Vimeo: play() blocked or failed (e.g. autoplay policy) */
+  onPlaybackError?: (message: string) => void;
 };
 
 export type AdapterFactory = (

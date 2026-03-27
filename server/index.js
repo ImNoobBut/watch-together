@@ -5,10 +5,16 @@ import cors from "cors";
 import bcrypt from "bcrypt";
 import { customAlphabet, nanoid } from "nanoid";
 import { createRoomState, isValidProvider } from "./rooms.js";
+import { isValidLoadVideoSource } from "./validateVideoLoad.js";
 import { initDb, bootstrapAdmin, isBannedSubject } from "./db.js";
 import { verifyToken } from "./jwtUtil.js";
 import { createAuthRouter } from "./authRoutes.js";
 import { createAdminRouter } from "./adminRoutes.js";
+import {
+  createUploadRouter,
+  registerVideoMediaRoute,
+  startUploadCleanupTimer,
+} from "./uploadVideoRoutes.js";
 import { logger } from "./logger.js";
 import { auditLog } from "./audit.js";
 import { createCorsOptions } from "./corsOptions.js";
@@ -29,6 +35,9 @@ app.use(cors(corsOptions));
 app.use(express.json({ limit: "48kb" }));
 
 app.get("/health", (_req, res) => res.json({ ok: true }));
+
+app.use("/api/room", createUploadRouter());
+registerVideoMediaRoute(app);
 
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
@@ -513,6 +522,10 @@ io.on("connection", (socket) => {
       typeof data?.source === "string" ? data.source.trim() : "";
     if (!isValidProvider(provider) || !source) return;
 
+    if (!isValidLoadVideoSource(provider, source)) {
+      return;
+    }
+
     if (provider === "screenshare" && !isRoomHost(socket, room)) {
       socket.emit("control_denied", { reason: "only_host" });
       auditLog(socket.data.userSub, "playback_control_denied", {
@@ -751,4 +764,5 @@ process.on("unhandledRejection", (reason) => {
 
 httpServer.listen(PORT, HOST, () => {
   logger.info({ port: PORT, host: HOST }, "server_listening");
+  startUploadCleanupTimer();
 });

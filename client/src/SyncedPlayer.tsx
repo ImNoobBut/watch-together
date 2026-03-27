@@ -8,7 +8,6 @@ import type { VideoProvider } from "./resolveVideoUrl";
 export type SyncedVideo = {
   provider: VideoProvider;
   source: string;
-  audioOnly?: boolean;
 };
 
 type Playback = { time: number; isPlaying: boolean };
@@ -94,12 +93,17 @@ export function SyncedPlayer({
       try {
         const adapter = await createVideoAdapter(video.provider, {
           source: video.source,
-          audioOnly: Boolean(video.audioOnly),
           onUserEvent: (e) => {
             if (!canControlRef.current) return;
             if (e.type === "play") socket.emit("play", { time: e.time });
             else if (e.type === "pause") socket.emit("pause", { time: e.time });
             else if (e.type === "seek") socket.emit("seek", { time: e.time });
+          },
+          onMediaError: (message) => {
+            if (!cancelled) reportLoad("error", message);
+          },
+          onPlaybackError: (message) => {
+            if (!cancelled) reportLoad("error", message);
           },
         });
         if (cancelled) {
@@ -110,13 +114,44 @@ export function SyncedPlayer({
         adapterRef.current = adapter;
         adapter.mount(el);
 
+        if (cancelled) {
+          adapter.destroy();
+          adapterRef.current = null;
+          return;
+        }
+        try {
+          await adapter.waitUntilReady();
+        } catch (waitErr) {
+          if (cancelled) {
+            adapter.destroy();
+            adapterRef.current = null;
+            return;
+          }
+          adapter.destroy();
+          adapterRef.current = null;
+          const msg =
+            waitErr instanceof Error ? waitErr.message : String(waitErr);
+          if (msg === "cancelled") {
+            return;
+          }
+          reportLoad("error", msg);
+          return;
+        }
+
+        if (cancelled) {
+          adapter.destroy();
+          adapterRef.current = null;
+          return;
+        }
+
+        if (!cancelled) reportLoad("ready");
+
         const pb = playbackRef.current;
         adapter.setSuppressEmit(true);
         if (pb.isPlaying) await adapter.applyPlay(pb.time);
         else await adapter.applyPause(pb.time);
         adapter.setSuppressEmit(false);
         lastAppliedRef.current = { time: pb.time, isPlaying: pb.isPlaying };
-        if (!cancelled) reportLoad("ready");
       } catch (err) {
         logClientError("video_adapter_load_failed", {
           provider: video.provider,

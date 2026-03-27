@@ -799,10 +799,13 @@ button.linkish {
   z-index: 0;
 }
 
+/* Loading overlay: do not capture clicks — the iframe/video sits underneath (z-index 1)
+   and must receive taps even if "ready" state is slightly delayed. */
 .synced-player-overlay {
   position: absolute;
   inset: 0;
   z-index: 2;
+  pointer-events: none;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -815,6 +818,7 @@ button.linkish {
 
 .synced-player-overlay--error {
   color: #f0c0a8;
+  pointer-events: auto;
 }
 
 .synced-player {

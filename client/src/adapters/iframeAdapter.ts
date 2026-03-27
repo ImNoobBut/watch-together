@@ -1,8 +1,11 @@
 import type { CreateAdapterOptions, VideoAdapter } from "./types";
+import { withTimeout } from "./withTimeout";
 
 export async function createIframeAdapter(
   opts: CreateAdapterOptions
 ): Promise<VideoAdapter> {
+  let iframeEl: HTMLIFrameElement | null = null;
+
   return {
     provider: "iframe",
 
@@ -10,19 +13,12 @@ export async function createIframeAdapter(
 
     mount(container: HTMLElement) {
       container.innerHTML = "";
-      if (opts.audioOnly) {
-        const note = document.createElement("div");
-        note.className = "synced-player-placeholder";
-        note.textContent =
-          "Audio-only mode is limited for generic embeds. Use direct media links for best results.";
-        container.appendChild(note);
-      }
       const iframe = document.createElement("iframe");
       iframe.src = opts.source;
-      iframe.style.width = opts.audioOnly ? "1px" : "100%";
-      iframe.style.height = opts.audioOnly ? "1px" : "100%";
-      iframe.style.opacity = opts.audioOnly ? "0.01" : "1";
-      iframe.style.pointerEvents = opts.audioOnly ? "none" : "auto";
+      iframe.style.width = "100%";
+      iframe.style.height = "100%";
+      iframe.style.opacity = "1";
+      iframe.style.pointerEvents = "auto";
       iframe.style.border = "0";
       iframe.allowFullscreen = true;
       iframe.setAttribute(
@@ -30,9 +26,32 @@ export async function createIframeAdapter(
         "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
       );
       container.appendChild(iframe);
+      iframeEl = iframe;
     },
 
-    destroy() {},
+    async waitUntilReady() {
+      const iframe = iframeEl;
+      if (!iframe) throw new Error("No iframe.");
+      const loadPromise = new Promise<void>((resolve, reject) => {
+        iframe.addEventListener("load", () => resolve(), { once: true });
+        iframe.addEventListener(
+          "error",
+          () => {
+            reject(new Error("The embed could not be loaded."));
+          },
+          { once: true },
+        );
+      });
+      await withTimeout(
+        loadPromise,
+        20_000,
+        "Embed did not load in time. It may be blocked or the page may not allow embedding.",
+      );
+    },
+
+    destroy() {
+      iframeEl = null;
+    },
 
     async applySeek() {},
     async applyPlay() {},

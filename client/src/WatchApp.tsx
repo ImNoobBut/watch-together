@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { io, type Socket } from "socket.io-client";
-import { socketUrl } from "./apiBase";
+import { apiBase, socketUrl } from "./apiBase";
 import { APP_DISPLAY_NAME } from "./appName";
 import { Chat } from "./Chat";
 import {
@@ -37,7 +37,6 @@ type RoomPayload = {
   onlyHostControls: boolean;
   videoProvider: string | null;
   videoSource: string | null;
-  audioOnly?: boolean;
   currentTime: number;
   isPlaying: boolean;
   username?: string;
@@ -58,7 +57,6 @@ type PublicRoom = {
 type RoomVideo = {
   provider: VideoProvider;
   source: string;
-  audioOnly?: boolean;
 };
 
 type Props = {
@@ -94,7 +92,7 @@ export function WatchApp({ token, onLogout, isAdmin }: Props) {
   const [transferTarget, setTransferTarget] = useState("");
   const [maxInput, setMaxInput] = useState("10");
   const [maxUnlimited, setMaxUnlimited] = useState(false);
-  const [audioOnlyInput, setAudioOnlyInput] = useState(false);
+  const [uploadingLocal, setUploadingLocal] = useState(false);
   const [playerFullscreen, setPlayerFullscreen] = useState(false);
   const [lobbyBusy, setLobbyBusy] = useState(false);
   const [lobbyAction, setLobbyAction] = useState<null | "create" | "join">(
@@ -112,7 +110,6 @@ export function WatchApp({ token, onLogout, isAdmin }: Props) {
   const hostSocketIdRef = useRef<string | null>(hostSocketId);
   const activityIdRef = useRef(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const activeLocalBlobUrlRef = useRef<string | null>(null);
   const pendingHostTransferTargetRef = useRef<string | null>(null);
   const lastConnectedAtRef = useRef(0);
   const lastDisconnectReasonRef = useRef<string | null>(null);
@@ -294,29 +291,38 @@ export function WatchApp({ token, onLogout, isAdmin }: Props) {
           reconnectionDelayMax: 8000,
           randomizationFactor: 0.35,
         };
-    const s = io(socketUrl(), {
-      auth: { token },
-      transports: ["websocket", "polling"],
-      upgrade: true,
-      autoConnect: true,
-      reconnection: true,
-      reconnectionAttempts: Infinity,
-      timeout: reconnectProfile.timeout,
-      reconnectionDelay: reconnectProfile.reconnectionDelay,
-      reconnectionDelayMax: reconnectProfile.reconnectionDelayMax,
-      randomizationFactor: reconnectProfile.randomizationFactor,
+
+    let cancelled = false;
+    let socketInstance: Socket | null = null;
+    const frameId = requestAnimationFrame(() => {
+      if (cancelled) return;
+      const s = io(socketUrl(), {
+        auth: { token },
+        transports: ["websocket", "polling"],
+        upgrade: true,
+        autoConnect: true,
+        reconnection: true,
+        reconnectionAttempts: Infinity,
+        timeout: reconnectProfile.timeout,
+        reconnectionDelay: reconnectProfile.reconnectionDelay,
+        reconnectionDelayMax: reconnectProfile.reconnectionDelayMax,
+        randomizationFactor: reconnectProfile.randomizationFactor,
+      });
+      socketInstance = s;
+      setSocket(s);
     });
-    setSocket(s);
+
     return () => {
-      s.disconnect();
+      cancelled = true;
+      cancelAnimationFrame(frameId);
+      if (socketInstance) {
+        socketInstance.disconnect();
+      }
+      setSocket(null);
     };
   }, [isInstagramWebView, token]);
 
   const resetRoomStateToLobby = useCallback(() => {
-    if (activeLocalBlobUrlRef.current) {
-      URL.revokeObjectURL(activeLocalBlobUrlRef.current);
-      activeLocalBlobUrlRef.current = null;
-    }
     setRoomId(null);
     setHostSocketId(null);
     setVideo(null);
@@ -325,59 +331,27 @@ export function WatchApp({ token, onLogout, isAdmin }: Props) {
     setActivityLines([]);
   }, []);
 
-  const applyRoomPayload = useCallback(
-    (p: RoomPayload) => {
-      setRoomId(p.roomId);
-      setHostSocketId(p.hostSocketId);
-      setOnlyHostControls(p.onlyHostControls);
-      setPlayback({ time: p.currentTime, isPlaying: p.isPlaying });
-      if (p.username) setUsername(p.username);
-      if (p.maxUsers !== undefined) {
-        setMaxUsers(p.maxUsers);
-        setMaxUnlimited(p.maxUsers == null);
-        setMaxInput(p.maxUsers == null ? "" : String(p.maxUsers));
-      }
-      if (p.peers) setPeers(p.peers);
-      if (p.videoProvider && p.videoSource) {
-        const blobLocalOnly =
-          p.videoProvider === "html5" &&
-          p.videoSource.startsWith("blob:") &&
-          socket?.id != null &&
-          p.hostSocketId != null &&
-          socket.id !== p.hostSocketId;
-        if (blobLocalOnly) {
-          setVideo(null);
-        } else {
-          setVideo({
-            provider: p.videoProvider as VideoProvider,
-            source: p.videoSource,
-            audioOnly: Boolean(p.audioOnly),
-          });
-        }
-      } else {
-        setVideo(null);
-      }
-    },
-    [socket],
-  );
-
-  useEffect(() => {
-    return () => {
-      if (activeLocalBlobUrlRef.current) {
-        URL.revokeObjectURL(activeLocalBlobUrlRef.current);
-        activeLocalBlobUrlRef.current = null;
-      }
-    };
-  }, []);
-
-  useEffect(() => {
-    const active = activeLocalBlobUrlRef.current;
-    if (!active) return;
-    if (!video || video.provider !== "html5" || video.source !== active) {
-      URL.revokeObjectURL(active);
-      activeLocalBlobUrlRef.current = null;
+  const applyRoomPayload = useCallback((p: RoomPayload) => {
+    setRoomId(p.roomId);
+    setHostSocketId(p.hostSocketId);
+    setOnlyHostControls(p.onlyHostControls);
+    setPlayback({ time: p.currentTime, isPlaying: p.isPlaying });
+    if (p.username) setUsername(p.username);
+    if (p.maxUsers !== undefined) {
+      setMaxUsers(p.maxUsers);
+      setMaxUnlimited(p.maxUsers == null);
+      setMaxInput(p.maxUsers == null ? "" : String(p.maxUsers));
     }
-  }, [video]);
+    if (p.peers) setPeers(p.peers);
+    if (p.videoProvider && p.videoSource) {
+      setVideo({
+        provider: p.videoProvider as VideoProvider,
+        source: p.videoSource,
+      });
+    } else {
+      setVideo(null);
+    }
+  }, []);
 
   useEffect(() => {
     if (!socket) return;
@@ -538,7 +512,7 @@ export function WatchApp({ token, onLogout, isAdmin }: Props) {
       const id = ++activityIdRef.current;
       setActivityLines([{ id, text: "You joined the room." }]);
     };
-    const onLoad = (d: { provider: string; source: string; audioOnly?: boolean }) => {
+    const onLoad = (d: { provider: string; source: string }) => {
       if (
         d.provider === "html5" &&
         d.source.startsWith("blob:") &&
@@ -551,7 +525,6 @@ export function WatchApp({ token, onLogout, isAdmin }: Props) {
       setVideo({
         provider: d.provider as VideoProvider,
         source: d.source,
-        audioOnly: Boolean(d.audioOnly),
       });
       setPlayback({ time: 0, isPlaying: false });
       pushActivity("New video loaded.");
@@ -789,7 +762,6 @@ export function WatchApp({ token, onLogout, isAdmin }: Props) {
     socket.emit("load_video", {
       provider: r.provider,
       source: r.source,
-      audioOnly: audioOnlyInput,
     });
     setUrlInput("");
   }
@@ -800,7 +772,6 @@ export function WatchApp({ token, onLogout, isAdmin }: Props) {
     socket.emit("load_video", {
       provider: "screenshare",
       source: "stream",
-      audioOnly: audioOnlyInput,
     });
   }
 
@@ -831,21 +802,51 @@ export function WatchApp({ token, onLogout, isAdmin }: Props) {
     socket.emit("transfer_host", { targetSocketId: transferTarget });
   }
 
-  function loadLocalVideoFromDevice(file: File | null) {
+  async function loadLocalVideoFromDevice(file: File | null) {
     if (!socket || !isHost || !file) return;
     if (!file.type.startsWith("video/")) {
       setBanner("Please choose a valid video file.");
       return;
     }
-    if (activeLocalBlobUrlRef.current) {
-      URL.revokeObjectURL(activeLocalBlobUrlRef.current);
-    }
-    const objectUrl = URL.createObjectURL(file);
-    activeLocalBlobUrlRef.current = objectUrl;
-    socket.emit("load_video", { provider: "html5", source: objectUrl });
-    setBanner(`Loaded local file: ${file.name}`);
-    if (fileInputRef.current) {
-      fileInputRef.current.value = "";
+    setUploadingLocal(true);
+    setBanner(null);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const base = apiBase().replace(/\/$/, "");
+      const res = await fetch(`${base}/api/room/upload-video`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body: form,
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        url?: string;
+      };
+      if (!res.ok) {
+        setBanner(
+          typeof data.error === "string"
+            ? data.error
+            : `Upload failed (${res.status}).`,
+        );
+        return;
+      }
+      const path = typeof data.url === "string" ? data.url : "";
+      if (!path.startsWith("/")) {
+        setBanner("Upload response was invalid.");
+        return;
+      }
+      const absolute = new URL(path, `${base}/`).href;
+      socket.emit("load_video", {
+        provider: "html5",
+        source: absolute,
+      });
+      setBanner(`Loaded: ${file.name}`);
+    } catch {
+      setBanner("Could not upload the file. Check your connection and try again.");
+    } finally {
+      setUploadingLocal(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
     }
   }
 
@@ -976,7 +977,6 @@ export function WatchApp({ token, onLogout, isAdmin }: Props) {
                 hostSocketId={hostSocketId}
                 isHost={isHost}
                 peers={peers}
-                audioOnly={Boolean(video.audioOnly)}
                 onError={reportMediaError}
               />
             ) : (
@@ -1004,15 +1004,25 @@ export function WatchApp({ token, onLogout, isAdmin }: Props) {
           )}
 
           <section className="controls">
-            <div className="load-row">
+            <form
+              className="load-row"
+              onSubmit={(e) => {
+                e.preventDefault();
+                loadVideo();
+              }}
+            >
               <input
                 className="url-input"
                 value={urlInput}
                 onChange={(e) => setUrlInput(e.target.value)}
                 placeholder="Paste video URL…"
                 disabled={!canControl}
+                aria-describedby="url-load-hint"
+                autoComplete="off"
+                spellCheck={false}
+                inputMode="url"
               />
-              <button type="button" onClick={loadVideo} disabled={!canControl}>
+              <button type="submit" disabled={!canControl}>
                 Load video
               </button>
               <button
@@ -1021,19 +1031,13 @@ export function WatchApp({ token, onLogout, isAdmin }: Props) {
                 disabled={!isHost || video?.provider === "screenshare"}
                 title="Host only — mesh WebRTC to viewers in this room"
               >
-                {audioOnlyInput ? "Share screen audio" : "Share screen"}
+                Share screen
               </button>
-            </div>
-            {canControl && (
-              <label className="host-toggle">
-                <input
-                  type="checkbox"
-                  checked={audioOnlyInput}
-                  onChange={(e) => setAudioOnlyInput(e.target.checked)}
-                />
-                Audio-only mode for next load/share
-              </label>
-            )}
+            </form>
+            <p id="url-load-hint" className="muted small" style={{ marginTop: "0.35rem" }}>
+              Use a YouTube or Vimeo link, or a direct file URL ending in .mp4, .webm, or .ogg. After
+              loading, press play on the on-screen player (required by most browsers).
+            </p>
             {hostToggle}
             {isHost && (
               <div className="host-tools">
@@ -1045,10 +1049,14 @@ export function WatchApp({ token, onLogout, isAdmin }: Props) {
                     ref={fileInputRef}
                     type="file"
                     accept="video/*"
+                    disabled={uploadingLocal}
                     onChange={(e) => {
-                      loadLocalVideoFromDevice(e.target.files?.[0] ?? null);
+                      void loadLocalVideoFromDevice(e.target.files?.[0] ?? null);
                     }}
                   />
+                  {uploadingLocal && (
+                    <span className="muted small">Uploading…</span>
+                  )}
                 </div>
                 <div className="load-row">
                   <label className="host-toggle">
